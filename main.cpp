@@ -131,12 +131,13 @@ InitGraphics()
 	// set the initial window configuration:
 
 	glutInitWindowPosition(0, 0);
-	glutInitWindowSize(INIT_WINDOW_SIZE, INIT_WINDOW_SIZE);
+	glutInitWindowSize(glutGet(GLUT_SCREEN_WIDTH), glutGet(GLUT_SCREEN_HEIGHT));
 
 	// open the window and set its title:
 
 	MainWindow = glutCreateWindow(WINDOWTITLE);
 	glutSetWindowTitle(WINDOWTITLE);
+	glutFullScreen();   // press ESC or Q to leave
 
 	// set the framebuffer clear values:
 
@@ -192,18 +193,14 @@ InitGraphics()
 
 	//Load resources
 	//auto tifrf = tifReader("./assets/ldem_4.tif");
-	auto tifrf = tifReader("./assets/ldem_16.tif");
+	auto tifrf = tifReader("./assets/ldem_64.tif");
 	auto intf = tifrf.get_values();
 	auto valuef = tifrf.getValueCount();
 
-	std::vector<float> f_values;
-	for (unsigned int valNum = 0; valNum < valuef; valNum++)
-	{
-		f_values.push_back(*((float*)(intf + (valNum * sizeof(float)))));
-	}
-	
-	displacementArray = new float[valuef];
-	(void)memmove(&displacementArray[0], &f_values[0], valuef * sizeof(float));
+	// get_values() already hands back the float array the texture needs.
+	// Copying it through a vector and then again into a fresh buffer cost
+	// three extra gigabyte-scale allocations at this resolution.
+	displacementArray = (float*)intf;
 
 	//Load Texture
 	glGenTextures(1, &MoonTexName);
@@ -211,9 +208,9 @@ InitGraphics()
 	//MoonTexture = BmpToTexture("./assets/ldem_4_uint.bmp", &nums, &numt);
 	//int nums = 4096, numt = 2048;
 	//MoonTexture = BmpToTexture("./assets/lroc_color_poles_4k.bmp", &nums, &numt);
-	int nums = 8192, numt = 4096;
+	int nums = 27360, numt = 13680;
 	//MoonTexture = BmpToTexture("./assets/lroc_color_poles_8k.bmp", &nums, &numt);
-	MoonTexture = BmpToTexture("./assets/lroc_color_poles_8k_flipped.bmp", &nums, &numt);
+	MoonTexture = BmpToTexture("./assets/lroc_color_poles_flipped.bmp", &nums, &numt);
 	//int nums = 16384, numt = 8192;
 	//MoonTexture = BmpToTexture("./assets/lroc_color_poles_16k.bmp", &nums, &numt);
 	//int nums = 27360, numt = 13680;
@@ -225,15 +222,15 @@ InitGraphics()
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, 3, nums, numt, 0, GL_RGB, GL_UNSIGNED_BYTE, MoonTexture);
+	delete[] MoonTexture;   // the driver holds its own copy now
+	MoonTexture = NULL;
 
 	glGenTextures(1, &MoonDispTexName);
 	//int nums_d = 1440, numt_d = 720;
-	int nums_d = 5760, numt_d = 2880;
+	int nums_d = 23040, numt_d = 11520;
 	//MoonDispTexture = BmpToTexture("./assets/ldem_4.bmp", &nums_d, &numt_d);
 	//int nums_d = 6144, numt_d = 3072;
-	MoonDispTexture = new float[nums_d * numt_d];
-
-	(void)memmove(&MoonDispTexture[0], &displacementArray[0], nums_d * numt_d * sizeof(float));
+	MoonDispTexture = displacementArray;
 	//Flip Rows - Not using flipped texture
 	/*for(int i = 0; i < numt_d; i++)
 	{
@@ -253,6 +250,9 @@ InitGraphics()
 	//glTexImage2D(GL_TEXTURE_2D, 0, 3, nums_d, numt_d, 0, GL_RGB, GL_UNSIGNED_BYTE, MoonDispTexture);
 	//glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, nums_d, numt_d, 0, GL_RED, GL_FLOAT, displacementArray);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, nums_d, numt_d, 0, GL_RED, GL_FLOAT, MoonDispTexture);
+	delete[] (char*)displacementArray;   // ditto
+	displacementArray = NULL;
+	MoonDispTexture = NULL;
 
 	//Draw Track Points
 	int wayPoints = 16;
@@ -299,12 +299,12 @@ InitLists()
 {
 	SphereDataList = glGenLists(1);
 	glNewList(SphereDataList, GL_COMPILE);
-	Sphere(1.f, 360 * 4, 360 * 4);
+	Sphere(1.f, 360 * 8, 360 * 8);
 	glEndList();
 
 	MoonDataList = glGenLists(1);
 	glNewList(MoonDataList, GL_COMPILE);
-	Sphere(MOON_RADIUS_IN_KM, 360 * 4, 360 * 4);
+	Sphere(MOON_RADIUS_IN_KM, 360 * 8, 360 * 8);
 	glEndList();
 }
 
@@ -341,13 +341,13 @@ Display()
 	// specify shading to be flat:
 	glShadeModel(GL_FLAT);
 
-	// set the viewport to a square centered in the window:
+	// use the whole window; the projection below matches its aspect ratio,
+	// so nothing is stretched and no screen area is wasted on letterboxing:
 	GLsizei vx = glutGet(GLUT_WINDOW_WIDTH);
 	GLsizei vy = glutGet(GLUT_WINDOW_HEIGHT);
-	GLsizei v = vx < vy ? vx : vy;			// minimum dimension
-	GLint xl = (vx - v) / 2;
-	GLint yb = (vy - v) / 2;
-	glViewport(xl, yb, v, v);
+	if (vy < 1)
+		vy = 1;
+	glViewport(0, 0, vx, vy);
 
 	// set the viewing volume:
 	// remember that the Z clipping  values are actually
@@ -359,7 +359,7 @@ Display()
 	//if (WhichProjection == ORTHO)
 	//	glOrtho(-3., 3., -3., 3., 0.1, 1000.);
 	//else
-	gluPerspective(90., 1., 0.1, MOON_RADIUS_IN_KM * 2.f);
+	gluPerspective(90., (GLdouble)vx / (GLdouble)vy, 0.1, MOON_RADIUS_IN_KM * 2.f);
 
 
 	// place the objects into the scene:
@@ -469,6 +469,11 @@ Keyboard(unsigned char c, int x, int y)
 {
 	switch (c)
 	{
+
+	case 'q':
+	case 'Q':
+	case 27:		// ESC
+		exit(0);
 
 	case 'r':
 	case 'R':

@@ -14,20 +14,20 @@ tifReader::tifReader(std::string fileLocation)
 char* tifReader::get_values()
 {
 	char* values = nullptr;
-	unsigned int value_pos = 0;
-	values = new char[(_bitesPerSample / 8) * _length * _width];
+	size_t value_pos = 0;
+	values = new char[(size_t)(_bitesPerSample / 8) * _length * _width];
 	if (values == nullptr)
 	{
 		return nullptr;
 	}
 
-	for (int strip = 0; strip < _stripOffsets.size(); strip++)
+	// One read per strip. Reading a byte at a time costs over a billion calls
+	// on the 64 pixel/degree elevation map.
+	for (size_t strip = 0; strip < _stripOffsets.size(); strip++)
 	{
 		_stream->seekg(_stripOffsets[strip], std::ios::beg);
-		for (int pos = 0; pos < _expectedBytesPerStrip[strip]; pos++)
-		{
-			_stream->read(&values[value_pos++], 1);
-		}
+		_stream->read(&values[value_pos], _expectedBytesPerStrip[strip]);
+		value_pos += _expectedBytesPerStrip[strip];
 	}
 	return values;
 }

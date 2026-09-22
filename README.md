@@ -18,17 +18,21 @@ pacman -S mingw-w64-ucrt-x86_64-gcc \
 
 ## 1. Get the assets
 
-The texture data is several hundred megabytes and is not in this repository.
+The texture data is several gigabytes and is not in this repository.
 Download both files from the NASA Scientific Visualization Studio
 [CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) and put them in `assets/`:
 
-| File | What it is |
-| --- | --- |
-| `assets/ldem_16.tif` | LOLA elevation map, 5760 x 2880, 32-bit float |
-| `assets/lroc_color_poles_8k.tif` | LROC colour mosaic, 8192 x 4096 |
+| File | What it is | Size |
+| --- | --- | --- |
+| `assets/ldem_64.tif` | LOLA elevation map, 23040 x 11520, 32-bit float | 1.0 GB |
+| `assets/lroc_color_poles.tif` | LROC colour mosaic, 27360 x 13680 | 494 MB |
 
-Both sizes are mandatory. `main.cpp` hard-codes them, and a smaller elevation
-map will read past the end of its buffer.
+Both dimensions are hard-coded in `main.cpp`. A smaller elevation map will read
+past the end of its buffer.
+
+To run lighter, use `ldem_16.tif` and the 8k colour map instead, and change the
+three sizes in `main.cpp` (the file names and dimensions sit next to each other
+around lines 195, 214 and 231).
 
 ## 2. Convert the colour map
 
@@ -36,10 +40,18 @@ map will read past the end of its buffer.
 python convert_assets.py
 ```
 
-This writes `assets/lroc_color_poles_8k_flipped.bmp`. The conversion is required:
-the BMP loader in `bmpToTexture.cpp` only accepts an uncompressed 24-bit BMP with
-a 40-byte header, while the NASA file is an LZW-compressed TIFF. The image is
-also flipped vertically so that its orientation matches the elevation map.
+This writes `assets/lroc_color_poles_flipped.bmp` (1.1 GB). Pass `8k` for the
+smaller map, or `full` for the 16-bit sRGB variant of the same mosaic.
+
+The conversion is required: the BMP loader in `bmpToTexture.cpp` only accepts an
+uncompressed 24-bit BMP with a 40-byte header, while the NASA file is an
+LZW-compressed TIFF. The image is also flipped vertically so its orientation
+matches the elevation map, and the alpha channel is dropped.
+
+The kit also ships a `lroc_color_16bit_srgb.tif` at the same resolution. It is
+five times larger and renders noticeably flatter once truncated to the 8 bits
+per channel that a 24-bit BMP holds, so `lroc_color_poles.tif` is the better
+source here.
 
 The elevation map needs no conversion.
 
@@ -67,8 +79,14 @@ and the build fails.
 build.bat run
 ```
 
-Run it from the project root, since the asset paths are relative. Startup takes
-a few seconds: the sphere is tessellated into display lists at 1440 x 1440.
+Run it from the project root, since the asset paths are relative.
+
+**First launch takes about a minute.** The sphere is tessellated into display
+lists at 2880 x 2880, and the two maps are over a gigabyte each. Expect roughly
+1.5 GB of RAM while loading and about 3.9 GB of VRAM once running.
+
+It opens fullscreen at your screen resolution. There is no title bar, so use
+`Esc` or `Q` to quit.
 
 ### Controls
 
@@ -83,6 +101,7 @@ a few seconds: the sphere is tessellated into display lists at 1440 x 1440.
 | `V` | Toggle fly-by view |
 | `F` | Toggle fly-by track |
 | `R` | Reset the view |
+| `Esc` / `Q` | Quit |
 
 ## Building with Visual Studio instead
 

@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 """
-Convert the NASA CGI Moon Kit color map into the exact BMP flavour that
+Convert a NASA CGI Moon Kit colour map into the exact BMP flavour that
 bmpToTexture.cpp can read.
 
-The loader is hand-rolled and strict: it only accepts an uncompressed
-24-bit BMP with a 40-byte BITMAPINFOHEADER (it hard-codes fseek(fp, 14 + 40)).
-The NASA download is an LZW-compressed TIFF, so it must be re-encoded.
+The loader is hand-rolled and strict: it only accepts an uncompressed 24-bit
+BMP with a 40-byte BITMAPINFOHEADER (it hard-codes fseek(fp, 14 + 40)). The
+NASA downloads are LZW-compressed TIFFs, so they must be re-encoded.
 
-The image is also flipped vertically. BMP pixel data is stored bottom-up,
-so flipping first makes the north pole the first row in the file, which is
-texture coordinate t=0 in OpenGL. That matches the orientation the elevation
-map is uploaded with, keeping colour and relief aligned.
+Rows are written in top-to-bottom image order. Because BMP pixel data is
+stored bottom-up, that makes the north pole the first row in the file, which
+is texture coordinate t=0 in OpenGL -- matching the orientation the elevation
+map is uploaded with, so colour and relief stay aligned.
 
-The elevation map (ldem_16.tif) needs no conversion: it is already an
-uncompressed 32-bit float TIFF, which tifReader.cpp reads directly.
+The output is written a chunk of rows at a time rather than flipping the whole
+image in memory, which keeps peak RAM near the size of one decoded copy
+instead of two. That matters for the full-resolution map, where each copy is
+over a gigabyte.
 
-Usage:  python convert_assets.py
+The elevation maps (ldem_*.tif) need no conversion: they are already
+uncompressed 32-bit float TIFFs, which tifReader.cpp reads directly.
+
+Usage:
+    python convert_assets.py           # the map main.cpp expects
+    python convert_assets.py full      # 16-bit sRGB variant, same resolution
+    python convert_assets.py 8k        # 8k map
 """
 
 import os
+import struct
 import sys
 
 try:
@@ -26,46 +35,87 @@ try:
 except ImportError:
     sys.exit("Pillow is required:  pip install pillow")
 
+try:
+    import numpy as np
+except ImportError:
+    sys.exit("NumPy is required:  pip install numpy")
+
+Image.MAX_IMAGE_PIXELS = None  # these maps are far past the decompression-bomb guard
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 
-SRC = os.path.join(ASSETS, "lroc_color_poles_8k.tif")
-DST = os.path.join(ASSETS, "lroc_color_poles_8k_flipped.bmp")
+PRESETS = {
+    "full":  ("lroc_color_16bit_srgb.tif", "lroc_color_full_flipped.bmp", (27360, 13680)),
+    "poles": ("lroc_color_poles.tif",      "lroc_color_poles_flipped.bmp", (27360, 13680)),
+    "8k":    ("lroc_color_poles_8k.tif",   "lroc_color_poles_8k_flipped.bmp", (8192, 4096)),
+}
 
-EXPECTED_SIZE = (8192, 4096)
+ROWS_PER_CHUNK = 256
 
 
-def main():
-    if not os.path.isfile(SRC):
-        sys.exit("Missing %s\nDownload it from the NASA CGI Moon Kit first." % SRC)
+def write_bmp_header(out, width, height, row_bytes):
+    image_bytes = row_bytes * height
+    out.write(b"BM")
+    out.write(struct.pack("<IHHI", 54 + image_bytes, 0, 0, 54))
+    out.write(struct.pack("<IiiHHIIiiII",
+                          40,            # biSize -- the 40-byte header the loader assumes
+                          width,
+                          height,        # positive: bottom-up
+                          1,             # biPlanes
+                          24,            # biBitCount
+                          0,             # biCompression = BI_RGB
+                          image_bytes,
+                          0, 0, 0, 0))
 
-    elevation = os.path.join(ASSETS, "ldem_16.tif")
-    if not os.path.isfile(elevation):
-        print("Warning: %s not found; the program needs it too." % elevation)
 
-    img = Image.open(SRC)
-    print("source : %s %s" % (img.size, img.mode))
+def convert(preset):
+    src_name, dst_name, expected = PRESETS[preset]
+    src = os.path.join(ASSETS, src_name)
+    dst = os.path.join(ASSETS, dst_name)
 
-    if img.size != EXPECTED_SIZE:
-        sys.exit("Expected %s but got %s. main.cpp is wired to the 8k map."
-                 % (EXPECTED_SIZE, img.size))
+    if not os.path.isfile(src):
+        sys.exit("Missing %s\nDownload it from the NASA CGI Moon Kit first." % src)
 
-    if img.mode != "RGB":
+    img = Image.open(src)
+    print("source : %s  %s %s" % (src_name, img.size, img.mode))
+
+    if img.size != expected:
+        sys.exit("Expected %s but got %s." % (expected, img.size))
+
+    width, height = img.size
+    row_bytes = width * 3
+    if row_bytes % 4:
+        sys.exit("Width %d needs BMP row padding; this writer assumes none." % width)
+
+    if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
 
-    img = img.transpose(Image.FLIP_TOP_BOTTOM)
-    img.save(DST, format="BMP")
+    print("decoding (this is the slow part)...")
+    img.load()
 
-    size = os.path.getsize(DST)
-    expected = EXPECTED_SIZE[0] * EXPECTED_SIZE[1] * 3 + 54
-    print("output : %s" % DST)
-    print("bytes  : %d (expected %d)" % (size, expected))
+    with open(dst, "wb") as out:
+        write_bmp_header(out, width, height, row_bytes)
+        for y in range(0, height, ROWS_PER_CHUNK):
+            y1 = min(y + ROWS_PER_CHUNK, height)
+            chunk = np.asarray(img.crop((0, y, width, y1)))
+            # 2::-1 takes channels 2,1,0 -- RGB(A) to BGR, dropping any alpha
+            out.write(chunk[:, :, 2::-1].tobytes())
+            pct = 100.0 * y1 / height
+            print("\r  writing %5.1f%%" % pct, end="", flush=True)
+    print()
 
-    if size != expected:
-        sys.exit("Unexpected file size -- the BMP header is probably not the "
-                 "40-byte form the loader assumes.")
+    size = os.path.getsize(dst)
+    want = row_bytes * height + 54
+    print("output : %s" % dst)
+    print("bytes  : %d (expected %d)" % (size, want))
+    if size != want:
+        sys.exit("Unexpected file size.")
     print("OK")
 
 
 if __name__ == "__main__":
-    main()
+    which = sys.argv[1] if len(sys.argv) > 1 else "poles"
+    if which not in PRESETS:
+        sys.exit("Unknown preset %r. Choose from: %s" % (which, ", ".join(PRESETS)))
+    convert(which)

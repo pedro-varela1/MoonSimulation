@@ -94,7 +94,7 @@ BmpToTexture(char* filename, int* width, int* height)
 	// fprintf( stderr, "Image size found: %d x %d\n", ImageWidth, ImageHeight );
 
 
-	texture = new unsigned char[3 * nums * numt];
+	texture = new unsigned char[3 * (size_t)nums * numt];
 	if (texture == NULL)
 	{
 		fprintf(stderr, "Cannot allocate the texture array!\b");
@@ -123,19 +123,26 @@ BmpToTexture(char* filename, int* width, int* height)
 
 	if (InfoHeader.biBitCount == 24)
 	{
-		for (t = 0, tp = texture; t < numt; t++)
+		// One read per row, then swap BGR to RGB in place. Going through fgetc
+		// costs three calls per pixel, which is over a billion on the
+		// full-resolution colour map.
+		for (t = 0, tp = texture; t < numt; t++, tp += 3 * (size_t)nums)
 		{
-			for (s = 0; s < nums; s++, tp += 3)
+			if (fread(tp, 3, nums, fp) != (size_t)nums)
 			{
-				*(tp + 2) = fgetc(fp);		// b
-				*(tp + 1) = fgetc(fp);		// g
-				*(tp + 0) = fgetc(fp);		// r
+				fprintf(stderr, "Short read on row %d of '%s'\n", t, filename);
+				break;
 			}
 
-			for (e = 0; e < numextra; e++)
+			for (s = 0; s < nums; s++)
 			{
-				fgetc(fp);
+				unsigned char b = *(tp + 3 * s + 0);
+				*(tp + 3 * s + 0) = *(tp + 3 * s + 2);
+				*(tp + 3 * s + 2) = b;
 			}
+
+			if (numextra > 0)
+				fseek(fp, numextra, SEEK_CUR);
 		}
 	}
 
