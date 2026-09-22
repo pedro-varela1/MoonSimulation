@@ -1,0 +1,17 @@
+# Build output
+*.exe
+*.o
+*.obj
+Debug/
+Release/
+x64/
+
+# Visual Studio
+.vs/
+*.user
+
+# Assets: multi-hundred-MB NASA source data and the textures generated from it
+assets/
+
+# Written by the shader loader at runtime
+glsllog.txt
