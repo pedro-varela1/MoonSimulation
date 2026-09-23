@@ -1,0 +1,36 @@
+layout(std430, binding = 3) buffer Exposure { uint bins[128]; float ev; };
+layout(binding = 5) uniform sampler2D image;
+
+#if STAGE == 0
+layout(local_size_x = 16, local_size_y = 16) in;
+shared uint local[128];
+
+void main() {
+    uint li = gl_LocalInvocationIndex;
+    if (li < 128u) local[li] = 0u;
+    barrier();
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (all(lessThan(px, textureSize(image, 0)))) {
+        vec4 c = texelFetch(image, px, 0);
+        float m = light.w > 0.5 ? c.r : max(c.r, max(c.g, c.b));
+        if (c.a > 0.5 && m > 0.0) atomicAdd(local[clamp(int((log2(m) + 24.0) * 128.0 / 26.0), 0, 127)], 1u);
+    }
+    barrier();
+    if (li < 128u && local[li] > 0u) atomicAdd(bins[li], local[li]);
+}
+#else
+layout(local_size_x = 1) in;
+layout(location = 0) uniform float dt;
+
+void main() {
+    uint total = 0u, acc = 0u;
+    for (int i = 0; i < 128; i++) total += bins[i];
+    if (total > 0u) {
+        int k = 0;
+        for (; k < 127; k++) if ((acc += bins[k]) >= uint(0.98 * float(total))) break;
+        float target = log2(0.8) - ((float(k) + 0.5) * 26.0 / 128.0 - 24.0);
+        ev += (target - ev) * (1.0 - exp(-dt / 0.3));
+    }
+    for (int i = 0; i < 128; i++) bins[i] = 0u;
+}
+#endif
