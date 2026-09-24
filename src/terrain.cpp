@@ -4,12 +4,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 
 namespace {
 
-constexpr float HSCALE = 12;
+constexpr float HSCALE = 12, IF_SCALE = 0.25f;
 constexpr double R = 1737.4;
 
 TIFF* openTiff(const std::string& path) {
@@ -55,66 +54,63 @@ GLuint loadLola(const std::string& path) {
 }
 
 GLuint loadAlbedo(const Config& c) {
-    constexpr int W = 27360, H = 13680, CAP = 1520, BLEND = 152, TW = 6840, CHUNK = 512;
-    GLuint tex = texture2D(GL_RGBA8, W, H, levels(W, H), GL_CLAMP_TO_EDGE);
+    constexpr int W = 27360, H = 13680, CAP = 1520, BLEND = 152, TW = 6840, CHUNK = 256;
+    GLuint tex = texture2D(GL_RGB10_A2, W, H, levels(W, H), GL_CLAMP_TO_EDGE);
     glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY, 16);
     float lut[256];
     for (int i = 0; i < 256; i++) { float v = i / 255.f; lut[i] = v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); }
+    auto pack = [](glm::vec3 v) { glm::uvec3 q(glm::clamp(v / IF_SCALE, 0.f, 1.f) * 1023.f + 0.5f); return q.r | q.g << 10 | q.b << 20 | 3u << 30; };
+    std::vector<uint32_t> buf(size_t(W) * CHUNK);
+    std::vector<glm::vec3> blend(size_t(W) * BLEND * 2);
+    auto upload = [&](int x, int y, int w, int n) { glTextureSubImage2D(tex, 0, x, y, w, n, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, buf.data()); };
+    auto blendRow = [&](int y) { return y < CAP + BLEND ? &blend[size_t(y - CAP) * W] : &blend[size_t(y - (H - CAP - 2 * BLEND)) * W]; };
 
     TIFF* kit = openTiff(c.kitColor);
     uint16_t spp = 1;
     TIFFGetFieldDefaulted(kit, TIFFTAG_SAMPLESPERPIXEL, &spp);
-    std::vector<uint8_t> line(TIFFScanlineSize(kit)), buf(size_t(W) * 4 * CHUNK), blend(size_t(W) * 4 * BLEND * 2);
-    auto kitRow = [&](int y, uint8_t* out) {
-        TIFFReadScanline(kit, line.data(), y);
-        for (int x = 0; x < W; x++) {
-            const uint8_t* s = &line[size_t(x) * spp];
-            float Y = (lut[s[0]] + lut[s[1]] + lut[s[2]]) / 3;
-            for (int b = 0; b < 3; b++) out[4 * x + b] = uint8_t(std::clamp(c.kitGain[b] * Y + c.kitOffset[b], 0.f, 255.f) + 0.5f);
-            out[4 * x + 3] = 255;
-        }
-    };
+    std::vector<uint8_t> line(TIFFScanlineSize(kit));
+    auto kitIF = [&](int x) { const uint8_t* s = &line[size_t(x) * spp]; return c.kitGain * ((lut[s[0]] + lut[s[1]] + lut[s[2]]) / 3) + c.kitOffset; };
     for (int y = 0, n = 0; y < H; y++) {
-        bool cap = y < CAP || y >= H - CAP;
-        if (cap) kitRow(y, &buf[size_t(n++) * W * 4]);
-        else if (y < CAP + BLEND) kitRow(y, &blend[size_t(y - CAP) * W * 4]);
-        else if (y >= H - CAP - BLEND) kitRow(y, &blend[size_t(y - (H - CAP - 2 * BLEND)) * W * 4]);
-        else TIFFReadScanline(kit, line.data(), y);
-        if (n && (n == CHUNK || y == CAP - 1 || y == H - 1)) {
-            glTextureSubImage2D(tex, 0, 0, y + 1 - n, W, n, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
-            n = 0;
-        }
+        TIFFReadScanline(kit, line.data(), y);
+        if (y < CAP || y >= H - CAP) {
+            for (int x = 0; x < W; x++) buf[size_t(n) * W + x] = pack(kitIF(x));
+            if (++n == CHUNK || y == CAP - 1 || y == H - 1) upload(0, y + 1 - n, W, n), n = 0;
+        } else if (y < CAP + BLEND || y >= H - CAP - BLEND)
+            for (int x = 0; x < W; x++) blendRow(y)[x] = kitIF(x);
     }
     TIFFClose(kit);
 
-    for (auto& e : std::filesystem::directory_iterator(c.wacDir)) {
-        std::string name = e.path().filename().string();
-        if (name.rfind("WAC_HAPKE_3BAND_E350", 0) || e.path().extension() != ".TIF") continue;
-        bool north = name[20] == 'N';
-        int x0 = (std::stoi(name.substr(21, 4)) / 900 * TW + W / 2) % W, ky0 = north ? CAP : H / 2;
-        TIFF* t = openTiff(e.path().string());
-        std::vector<uint8_t> in(TIFFScanlineSize(t));
+    const std::string* dirs[3] = {&c.wac643, &c.wac566, &c.wac415};
+    const char* bands[3] = {"643", "566", "415"};
+    std::vector<float> in(size_t(TW) * CHUNK * 3);
+    for (int t = 0; t < 8; t++) {
+        bool north = t < 4;
+        int x0 = (t % 4 * TW + W / 2) % W, ky0 = north ? CAP : H / 2;
+        std::ifstream f[3];
+        for (int b = 0; b < 3; b++) {
+            char name[64];
+            snprintf(name, sizeof name, "/WAC_HAPKE_%sNM_E350%c%04d.IMG", bands[b], north ? 'N' : 'S', 450 + t % 4 * 900);
+            f[b].open(*dirs[b] + name, std::ios::binary | std::ios::ate);
+            if (!f[b]) { fprintf(stderr, "nao foi possivel abrir %s%s\n", dirs[b]->c_str(), name); exit(1); }
+            f[b].seekg(size_t(f[b].tellg()) - size_t(TW) * 4 * 5320);
+        }
         for (int y = 0; y < 5320; y += CHUNK) {
             int n = std::min(CHUNK, 5320 - y);
+            for (int b = 0; b < 3; b++) f[b].read(reinterpret_cast<char*>(&in[size_t(b) * TW * CHUNK]), size_t(TW) * 4 * n);
             for (int r = 0; r < n; r++) {
-                TIFFReadScanline(t, in.data(), y + r + north);
                 int ky = ky0 + y + r;
-                const uint8_t* kb = ky < CAP + BLEND ? &blend[size_t(ky - CAP) * W * 4]
-                                  : ky >= H - CAP - BLEND ? &blend[size_t(ky - (H - CAP - 2 * BLEND)) * W * 4] : nullptr;
+                const glm::vec3* kb = ky < CAP + BLEND || ky >= H - CAP - BLEND ? blendRow(ky) : nullptr;
                 float s = std::clamp((70 - std::abs(90 - (ky + 0.5f) / 76)) / 2, 0.f, 1.f), wgt = s * s * (3 - 2 * s);
-                uint8_t* o = &buf[size_t(r) * TW * 4];
-                uint8_t last[3] = {0, 0, 0};
+                glm::vec3 last(0.04f);
                 for (int k = 0; k < TW; k++) {
-                    const uint8_t* p = &in[3 * k];
-                    if (p[0] && p[1] && p[2]) last[0] = p[2], last[1] = p[1], last[2] = p[0];
-                    const uint8_t* q = kb ? kb + 4 * (x0 + k) : nullptr;
-                    for (int b = 0; b < 3; b++) o[4 * k + b] = q ? uint8_t(q[b] + wgt * (last[b] - q[b]) + 0.5f) : last[b];
-                    o[4 * k + 3] = 255;
+                    size_t i = size_t(r) * TW + k, B = size_t(TW) * CHUNK;
+                    glm::vec3 v(in[i], in[B + i], in[2 * B + i]);
+                    if (v.r > 0 && v.g > 0 && v.b > 0) last = v;
+                    buf[i] = pack(kb ? glm::mix(kb[x0 + k], last, wgt) : last);
                 }
             }
-            glTextureSubImage2D(tex, 0, x0, ky0 + y, TW, n, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
+            upload(x0, ky0 + y, TW, n);
         }
-        TIFFClose(t);
     }
     glGenerateTextureMipmap(tex);
     return tex;
@@ -122,7 +118,7 @@ GLuint loadAlbedo(const Config& c) {
 
 GLuint loadHapke(const std::string& dir) {
     constexpr int N = 360 * 140, PARAM[5] = {0, 1, 2, 5, 6};
-    const char* bands[3] = {"689NM", "415NM", "321NM"};
+    const char* bands[3] = {"643NM", "566NM", "415NM"};
     std::vector<float> m[3];
     for (int b = 0; b < 3; b++) {
         std::string path = dir + "/WAC_HAPKEPARAMMAP_" + bands[b] + ".IMG";
@@ -159,7 +155,7 @@ void Terrain::load(const Config& c) {
     printf("carregando LOLA...\n");
     fflush(stdout);
     lola = loadLola(c.lolaDem);
-    printf("carregando albedo (kit + WAC)...\n");
+    printf("carregando albedo (kit + WAC 643/566/415 nm)...\n");
     fflush(stdout);
     albedo = loadAlbedo(c);
     hapke = loadHapke(c.hapkeDir);

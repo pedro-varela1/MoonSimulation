@@ -5,7 +5,7 @@ Real-time OpenGL 4.6 visualization of a CubeSat in lunar orbit, in two windows:
 - **Órbita** – the Moon lit by the real Sun, the CubeSat (OBJ model, or a marker), and
   the orbit track for ±half a revolution. Free view or follow the satellite.
 - **Câmera** – what the CubeSat camera sees: SLDEM2015 512 ppd terrain, LROC WAC
-  Hapke-normalized color, Hapke photometry, soft shadows from the solar disc,
+  Hapke-normalized color (643/566/415 nm natural color), Hapke photometry, soft shadows from the solar disc,
   earthshine and auto-exposure.
 
 Both windows use the same per-pixel ray caster. Nothing is written to disk.
@@ -20,7 +20,7 @@ Both windows use the same per-pixel ray caster. Nothing is written to disk.
   and extract only `cspice/include` and `cspice/src/cspice` into `third_party/cspice/`.
   The Makefile compiles it with MinGW on the first build.
 - **Hapke parameter maps** (Sato et al. 2014), into `assets/hapke/`:
-  `WAC_HAPKEPARAMMAP_{321NM,415NM,689NM}.IMG` from the
+  `WAC_HAPKEPARAMMAP_{643NM,566NM,415NM}.IMG` from the
   [LROC PDS](https://pds.mcp.nasa.gov/data/store/img/lunar_reconnaissance_orbiter/pds4/lroc/lro-l-lroc-5-rdr/LROLRC_2001/DATA/SDP/WAC_HAPKEPARAMMAP/).
 
 Data (paths in `config.ini`):
@@ -28,7 +28,7 @@ Data (paths in `config.ini`):
 | Key | Data |
 | --- | --- |
 | `sldem_dir` | SLDEM2015 512 ppd DEFLATE-tiled GeoTIFFs (`sldem2015_512_*_float.tif`), ±60° |
-| `wac_dir` | `WAC_HAPKE_3BAND_E350*.TIF` (689/415/321 nm), ±70° |
+| `wac_643`, `wac_566`, `wac_415` | Float I/F tiles `WAC_HAPKE_<band>NM_E350*.IMG` (LROC PDS `DATA/MDR/WAC_HAPKE`), ±70° |
 | `lola_dem`, `kit_color` | [CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) `ldem_64.tif` and `lroc_color_poles.tif`, used beyond ±60°/±70° |
 | `spice_dir` | Every kernel in the folder is loaded: `naif0012.tls`, `de440s.bsp`, `moon_pa_de440_200625.bpc`, `moon_de440_220930.tf`, `pck00011.tpc` |
 | `orbit_file` | STK report with `Time (UTCG)`, `LatitudeMoon`, `LongitudeMoon`, `AltitudeMoon (km)` |
@@ -43,8 +43,8 @@ build.bat        # the first run also compiles CSPICE (~3 min)
 build.bat run    # or: MoonSimulation.exe [config.ini]
 ```
 
-Run from the project root, because shaders and assets are relative paths. Loading takes about 10–20 s,
-most of it reading the WAC mosaic from disk.
+Run from the project root, because shaders and assets are relative paths. Loading takes about 40 s,
+most of it reading the 3.5 GB of float WAC tiles from disk.
 
 ## Configuration (`config.ini`)
 
@@ -56,10 +56,9 @@ most of it reading the WAC mosaic from disk.
 | `orbit_fov`, `orbit_gain` | Vertical FOV and fixed gain of the orbit view |
 | `sensor`, `fov` | Camera resolution and horizontal FOV |
 | `tilt`, `azimuth`, `roll` | Off-nadir angle; tilt direction relative to the velocity (0 = forward, 90 = right; the image top follows it); roll (positive turns the image clockwise) |
-| `color` | `rgb` (689/415/321 nm false color) or `gray` (689 nm), in both windows |
+| `color` | `natural` (643/566/415 nm) or `gray` (643 nm), in both windows |
 | `earthshine` | `1` lights the night side with earthshine, `0` turns it off |
-| `dn_gain`, `dn_offset` | I/F = gain·DN + offset per band, fitted against the Hapke maps (R² 0.99) |
-| `kit_gain`, `kit_offset` | Maps the kit's polar caps into WAC DN space (fit on 65–70°) |
+| `kit_gain`, `kit_offset` | Maps the kit's polar caps to I/F per band (fit on 65–70°) |
 
 ## Controls
 

@@ -8,7 +8,7 @@
 
 namespace {
 
-struct FrameUBO { glm::vec4 sunDir, earthDir, light, ifGain, ifOffset, sldemWin; };
+struct FrameUBO { glm::vec4 sunDir, earthDir, light, sldemWin; };
 struct ViewUBO { glm::vec4 eye, right, up, fwd, size; };
 constexpr double PI = 3.14159265358979, AU = 149597870.7, RSUN = 695700, REARTH = 6371, ZNEAR = 1e-5;
 
@@ -88,7 +88,7 @@ void Renderer::init(const Config& c, const Terrain& t, const Sldem& s) {
     glEnable(GL_PROGRAM_POINT_SIZE);
     if (!c.objFile.empty()) loadObj(c.objFile);
 
-    for (auto [tex, format] : {std::pair{&polarTex, GL_R16_SNORM}, std::pair{&polarAlb, GL_RGBA8}}) {
+    for (auto [tex, format] : {std::pair{&polarTex, GL_R16_SNORM}, std::pair{&polarAlb, GL_RGB10_A2}}) {
         glCreateTextures(GL_TEXTURE_2D, 1, tex);
         glTextureStorage2D(*tex, 13, format, 4096, 2048);
         glTextureParameteri(*tex, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -100,7 +100,7 @@ void Renderer::init(const Config& c, const Terrain& t, const Sldem& s) {
     glBindTextureUnit(0, t.lola);
     glBindTextureUnit(1, t.albedo);
     glBindImageTexture(0, polarTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R16_SNORM);
-    glBindImageTexture(1, polarAlb, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(1, polarAlb, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGB10_A2);
     glDispatchCompute(4096 / 16, 2048 / 16, 1);
     glMemoryBarrier(GL_ALL_BARRIER_BITS);
     glGenerateTextureMipmap(polarTex);
@@ -144,7 +144,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     double kE = cfg->earthshine * 2.0 / 3 * 0.306 * std::pow(REARTH / dE, 2) * (std::sin(a) + (PI - a) * std::cos(a)) / PI * std::pow(dS / glm::length(SE), 2);
     FrameUBO f{glm::vec4(glm::vec3(s.sun / dS), std::asin(RSUN / dS)), glm::vec4(glm::vec3(s.earth / dE), std::asin(REARTH / dE)),
                glm::vec4(std::pow(AU / dS, 2), kE, std::tan(glm::radians(23.657)), cfg->gray),
-               glm::vec4(cfg->dnGain * 255.f, 0), glm::vec4(cfg->dnOffset, 0), sldem->window()};
+               sldem->window()};
     ViewUBO vc = viewData(s.cam, cfg->sensor, 0), vv = viewData(s.view, fb, float(cfg->orbitGain));
     glNamedBufferSubData(frameUbo, 0, sizeof f, &f);
     glNamedBufferSubData(camUbo, 0, sizeof vc, &vc);

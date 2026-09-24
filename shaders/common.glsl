@@ -1,8 +1,8 @@
 const float R = 1737.4, HMAX = 11.0, HMIN = -9.2, HSCALE = 12.0, PI = 3.14159265, SLOPE = 0.8391, TEXEL = 0.0592253;
-const float POLAR_RHO = radians(16.0);
+const float POLAR_RHO = radians(16.0), IF_SCALE = 0.25;
 
 layout(std140, binding = 0) uniform Frame {
-    vec4 sunDir, earthDir, light, ifGain, ifOffset, sldemWin;
+    vec4 sunDir, earthDir, light, sldemWin;
 };
 layout(binding = 0) uniform sampler2D lolaTex;
 layout(binding = 1) uniform sampler2D albedoTex;
@@ -120,7 +120,7 @@ vec3 albedoIF(vec3 n, vec2 gx, vec2 gy, float fp) {
     float s = polarWeight(ll);
     vec3 dn = s < 1.0 ? textureGrad(albedoTex, kitUV(ll), gx, gy).rgb : vec3(0.0);
     if (s > 0.0) dn = mix(dn, textureLod(polarAlb, polarUV(n), log2(fp / 0.474)).rgb, s);
-    return max(ifGain.rgb * dn + ifOffset.rgb, 0.0);
+    return dn * IF_SCALE;
 }
 
 struct Hapke { vec3 w, b, c, bs0, hs; };
