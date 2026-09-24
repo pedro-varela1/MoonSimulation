@@ -12,7 +12,7 @@ void main() {
     ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (all(lessThan(px, textureSize(image, 0)))) {
         vec4 c = texelFetch(image, px, 0);
-        float m = light.w > 0.5 ? c.r : max(c.r, max(c.g, c.b));
+        float m = max(c.r, max(c.g, c.b));
         if (c.a > 0.5 && m > 0.0) atomicAdd(local[clamp(int((log2(m) + 24.0) * 128.0 / 26.0), 0, 127)], 1u);
     }
     barrier();

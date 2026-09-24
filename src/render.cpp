@@ -141,7 +141,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glm::dvec3 SE = s.sun - s.earth;
     double dS = glm::length(s.sun), dE = glm::length(s.earth);
     double a = std::acos(glm::clamp(glm::dot(SE / glm::length(SE), -s.earth / dE), -1.0, 1.0));
-    double kE = 2.0 / 3 * 0.306 * std::pow(REARTH / dE, 2) * (std::sin(a) + (PI - a) * std::cos(a)) / PI * std::pow(dS / glm::length(SE), 2);
+    double kE = cfg->earthshine * 2.0 / 3 * 0.306 * std::pow(REARTH / dE, 2) * (std::sin(a) + (PI - a) * std::cos(a)) / PI * std::pow(dS / glm::length(SE), 2);
     FrameUBO f{glm::vec4(glm::vec3(s.sun / dS), std::asin(RSUN / dS)), glm::vec4(glm::vec3(s.earth / dE), std::asin(REARTH / dE)),
                glm::vec4(std::pow(AU / dS, 2), kE, std::tan(glm::radians(23.657)), cfg->gray),
                glm::vec4(cfg->dnGain * 255.f, 0), glm::vec4(cfg->dnOffset, 0), sldem->window()};

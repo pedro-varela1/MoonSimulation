@@ -56,7 +56,8 @@ most of it reading the WAC mosaic from disk.
 | `orbit_fov`, `orbit_gain` | Vertical FOV and fixed gain of the orbit view |
 | `sensor`, `fov` | Camera resolution and horizontal FOV |
 | `tilt`, `azimuth`, `roll` | Off-nadir angle; tilt direction relative to the velocity (0 = forward, 90 = right; the image top follows it); roll (positive turns the image clockwise) |
-| `color` | `rgb` (689/415/321 nm false color) or `gray` (689 nm) |
+| `color` | `rgb` (689/415/321 nm false color) or `gray` (689 nm), in both windows |
+| `earthshine` | `1` lights the night side with earthshine, `0` turns it off |
 | `dn_gain`, `dn_offset` | I/F = gain·DN + offset per band, fitted against the Hapke maps (R² 0.99) |
 | `kit_gain`, `kit_offset` | Maps the kit's polar caps into WAC DN space (fit on 65–70°) |
 

@@ -27,7 +27,7 @@ void main() {
     float v = mu0 > 0.0 ? visibility(p, sunDir.xyz, sunDir.w, fp) : 0.0;
     if (v > 0.0) L = IF * hapkeRatio(mu0, mu, dot(sunDir.xyz, -d), P) * v;
     else if (mu0E > 0.0 && light.y > 0.0) L = IF * hapkeRatio(mu0E, mu, dot(earthDir.xyz, -d), P) * visibility(p, earthDir.xyz, earthDir.w, fp) * light.y;
-    L *= light.x;
+    L = (light.w > 0.5 ? L.rrr : L) * light.x;
     color = vec4(eye.w > 0.0 ? srgb(clamp(eye.w * L, 0.0, 1.0)) : L, 1.0);
     gl_FragDepth = fwd.w / (t * dot(d, fwd.xyz));
 }

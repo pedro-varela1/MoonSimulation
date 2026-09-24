@@ -14,7 +14,7 @@ struct Config {
     glm::dvec3 objRotation{0};
     glm::ivec4 orbitWindow{100, 100, 1280, 800}, cameraWindow{1400, 100, 900, 900};
     glm::ivec2 sensor{1024, 1024};
-    bool gray = false;
+    bool gray = false, earthshine = true;
     glm::vec3 dnGain{1}, dnOffset{0}, kitGain{1}, kitOffset{0};
 };
 
@@ -31,7 +31,7 @@ inline Config loadConfig(const char* path) {
         {"orbit_window", vec(c.orbitWindow)}, {"camera_window", vec(c.cameraWindow)},
         {"orbit_fov", num(c.orbitFov)}, {"orbit_gain", num(c.orbitGain)}, {"sensor", vec(c.sensor)},
         {"fov", num(c.fov)}, {"tilt", num(c.tilt)}, {"azimuth", num(c.azimuth)}, {"roll", num(c.roll)},
-        {"color", [&](std::istream& in) { std::string v; in >> v; c.gray = v == "gray"; }},
+        {"color", [&](std::istream& in) { std::string v; in >> v; c.gray = v == "gray"; }}, {"earthshine", num(c.earthshine)},
         {"dn_gain", vec(c.dnGain)}, {"dn_offset", vec(c.dnOffset)},
         {"kit_gain", vec(c.kitGain)}, {"kit_offset", vec(c.kitOffset)},
     };
