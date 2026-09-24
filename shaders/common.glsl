@@ -1,9 +1,11 @@
 const float R = 1737.4, HMAX = 11.0, HMIN = -9.2, HSCALE = 12.0, PI = 3.14159265, SLOPE = 0.8391, TEXEL = 0.0592253;
-const float CAP_RHO = radians(16.0), IF_SCALE = 0.25, PC = 15520.0, PS = 0.06;
+const float CAP_RHO = radians(16.0), IF_SCALE = 0.25, PC = 15520.0, PS = 0.06, PSF_SIGMA = 0.6, PSF_SIZE = 5.0;
 
 layout(std140, binding = 0) uniform Frame {
     vec4 sunDir, earthDir, light, sldemWin, polarWin;
+    mat3 earthToMe;
 };
+layout(std140, binding = 1) uniform View { vec4 eye, right, up, fwd, size; };
 layout(binding = 0) uniform sampler2D lolaTex;
 layout(binding = 1) uniform sampler2D albedoTex;
 layout(binding = 2) uniform sampler2DArray hapkeTex;
@@ -13,6 +15,7 @@ layout(binding = 6) uniform sampler2D capHTex;
 layout(binding = 7) uniform sampler2D capATex;
 layout(binding = 8) uniform sampler2D polarTex;
 layout(binding = 9) uniform sampler2D polarCover;
+layout(binding = 10) uniform sampler2D earthTex;
 
 vec2 lonLat(vec3 n) { return vec2(atan(n.y, n.x), asin(clamp(n.z, -1.0, 1.0))); }
 vec2 kitUV(vec2 ll) { return vec2(ll.x / (2.0 * PI) + 0.5, 0.5 - ll.y / PI); }
@@ -22,6 +25,7 @@ vec2 capUV(vec3 n) {
     return vec2((q.x * 0.5 + 0.5 + (n.z < 0.0 ? 1.0 : 0.0)) * 0.5, q.y * 0.5 + 0.5);
 }
 vec3 srgb(vec3 c) { return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+vec3 display(vec3 L) { return eye.w > 0.0 ? srgb(clamp(eye.w * L, 0.0, 1.0)) : L; }
 
 float sampleH(sampler2D tex, vec2 uv, float lod) {
     if (lod > 0.5) return textureLod(tex, uv, lod).r;

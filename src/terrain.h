@@ -13,7 +13,7 @@
 #include "config.h"
 
 struct Terrain {
-    GLuint lola = 0, albedo = 0, hapke = 0;
+    GLuint lola = 0, albedo = 0, hapke = 0, earth = 0;
     void load(const Config& c);
 };
 

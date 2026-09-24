@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
     auto a = std::make_unique<App>();
     a->cfg = loadConfig(argc > 1 ? argv[1] : "config.ini");
     ephem::init(a->cfg.spiceDir);
-    a->orbit.load(a->cfg.orbitFile, ephem::paToMe());
+    a->orbit.load(a->cfg.orbitFile, ephem::rotation("MOON_PA", "MOON_ME", 0));
     a->et0 = ephem::et(a->orbit.utc0);
     a->tStart = a->t = std::clamp(a->cfg.startUtc.empty() ? a->orbit.begin() : ephem::et(a->cfg.startUtc) - a->et0, a->orbit.begin(), a->orbit.end());
     a->speed = a->cfg.speed;
@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
     a->terrain.load(a->cfg);
     a->sldem = std::make_unique<Sldem>(a->cfg.sldemDir);
     a->polar = std::make_unique<PolarDem>(a->cfg.polarDir);
-    a->renderer.init(a->cfg, a->terrain, *a->sldem, *a->polar);
+    a->renderer.init(a->cfg, a->terrain, *a->sldem, *a->polar, a->cfg.starCatalog.empty() ? std::vector<ephem::Source>() : ephem::stars(a->cfg.starCatalog, a->et0 + a->tStart));
     glfwMakeContextCurrent(a->camWin);
     glfwSwapInterval(0);
     a->renderer.initCameraContext();
@@ -165,8 +165,12 @@ int main(int argc, char** argv) {
         s.cam = {st.p, s.att[0], s.att[1], -s.att[2], tx, tx * a->cfg.sensor.y / a->cfg.sensor.x};
         s.view = a->orbitCamera(st, fo);
         s.sat = st.p;
-        s.sun = ephem::sun(a->et0 + a->t);
-        s.earth = ephem::earth(a->et0 + a->t);
+        double et = a->et0 + a->t;
+        s.sun = ephem::sun(et);
+        s.earth = ephem::earth(et);
+        s.j2000ToMe = ephem::rotation("J2000", "MOON_ME", et);
+        s.earthToMe = ephem::rotation("IAU_EARTH", "MOON_ME", et);
+        s.planets = ephem::planets(et);
         s.dt = dt;
         for (int i = 0; i <= 1024; i++) s.track.push_back(a->orbit.at(std::clamp(a->t + (i / 1024.0 - 0.5) * a->orbit.period, a->orbit.begin(), a->orbit.end())).p);
         s.now = 512;
@@ -194,7 +198,7 @@ int main(int argc, char** argv) {
             double r = glm::length(st.p), fps = frames / (now - titleAt);
             char title[320];
             snprintf(title, sizeof title, "Órbita — %s UTC — %s×%g — lat %.3f° lon %.3f° alt %.2f km — h %.2f km — Sol %.1f° — %.0f%% iluminado — SLDEM %d/%d — polar %d/%d — %.0f fps",
-                     ephem::utc(a->et0 + a->t).c_str(), a->paused ? "pausado " : "", a->speed, glm::degrees(std::asin(st.p.z / r)),
+                     ephem::utc(et).c_str(), a->paused ? "pausado " : "", a->speed, glm::degrees(std::asin(st.p.z / r)),
                      glm::degrees(std::atan2(st.p.y, st.p.x)), r - R, a->renderer.satAbove,
                      glm::degrees(std::asin(glm::dot(glm::normalize(s.sun), st.p / r))), a->renderer.satVis * 100, a->sldem->resident,
                      a->sldem->pending, a->polar->resident, a->polar->pending, fps);

@@ -8,9 +8,10 @@
 
 namespace {
 
-struct FrameUBO { glm::vec4 sunDir, earthDir, light, sldemWin, polarWin; };
+struct FrameUBO { glm::vec4 sunDir, earthDir, light, sldemWin, polarWin; glm::mat3x4 earthToMe; };
 struct ViewUBO { glm::vec4 eye, right, up, fwd, size; };
-constexpr double PI = 3.14159265358979, AU = 149597870.7, RSUN = 695700, REARTH = 6371, ZNEAR = 1e-5;
+constexpr double PI = 3.14159265358979, AU = 149597870.7, RSUN = 695700, REARTH = 6371, ZNEAR = 1e-5, VSUN = -26.74, TSUN = 5772;
+constexpr double STAR_PEAK = 0.009;  // orbit window: linear display value of a star at orbit_star_mag (sRGB ~24/255)
 
 std::string readFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
@@ -47,19 +48,28 @@ GLuint buffer(size_t size, const void* data, GLbitfield flags) {
     return b;
 }
 
-ViewUBO viewData(const Camera& c, glm::vec2 size, float gain) {
+// gain > 0: illustrative view with a fixed display gain and a fixed star scale; gain = 0: physical, auto-exposed
+ViewUBO viewData(const Camera& c, glm::vec2 size, float gain, float starScale) {
     return {glm::vec4(glm::vec3(c.eye), gain), glm::vec4(glm::vec3(c.right), c.tanX), glm::vec4(glm::vec3(c.up), c.tanY),
-            glm::vec4(glm::vec3(c.fwd), ZNEAR), glm::vec4(size, 0, 0)};
+            glm::vec4(glm::vec3(c.fwd), ZNEAR), glm::vec4(size, starScale, 0)};
+}
+
+// pi x irradiance relative to the Sun at 1 AU in each band (643/566/415 nm): V magnitude, blackbody color relative to the Sun
+glm::vec4 flux(const ephem::Source& s) {
+    auto rel = [&](double nm) { return std::expm1(1.4387769e7 / (nm * TSUN)) / std::expm1(1.4387769e7 / (nm * s.teff)); };
+    double f = PI * std::pow(10, -0.4 * (s.vmag - VSUN)) / rel(551);
+    return {f * rel(643), f * rel(566), f * rel(415), 0};
 }
 
 }
 
-void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const Streamer& p) {
+void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const Streamer& p, const std::vector<ephem::Source>& catalog) {
     cfg = &c;
     terrain = &t;
     sldem = &s;
     polar = &p;
     moon = program({{GL_VERTEX_SHADER, "fullscreen.vert"}, {GL_FRAGMENT_SHADER, "moon.frag"}});
+    sky = program({{GL_VERTEX_SHADER, "sky.vert"}, {GL_FRAGMENT_SHADER, "sky.frag"}});
     show = program({{GL_VERTEX_SHADER, "fullscreen.vert"}, {GL_FRAGMENT_SHADER, "present.frag"}});
     overlay = program({{GL_VERTEX_SHADER, "overlay.vert"}, {GL_FRAGMENT_SHADER, "overlay.frag"}});
     hist = program({{GL_COMPUTE_SHADER, "exposure.comp"}}, "#define STAGE 0\n");
@@ -77,16 +87,25 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     probeMap = static_cast<const float*>(glMapNamedBufferRange(probeBuf, 0, sizeof probe0, map));
     expMap = static_cast<const float*>(glMapNamedBufferRange(expBuf, 0, sizeof exp0, map));
     trackBuf = buffer(sizeof(glm::vec4) * 1025, nullptr, GL_DYNAMIC_STORAGE_BIT);
+    std::vector<glm::vec4> pts;
+    for (auto& src : catalog) pts.insert(pts.end(), {glm::vec4(src.p), flux(src)});
+    stars = int(catalog.size());
+    pts.resize(2 * (stars + 5));
+    skyBuf = buffer(pts.size() * sizeof(glm::vec4), pts.data(), GL_DYNAMIC_STORAGE_BIT);
     glCreateTextures(GL_TEXTURE_2D, 1, &camTex);
     glTextureStorage2D(camTex, 1, GL_RGBA32F, c.sensor.x, c.sensor.y);
     glTextureParameteri(camTex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTextureParameteri(camTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTextureParameteri(camTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glCreateTextures(GL_TEXTURE_2D, 1, &camDepth);
+    glTextureStorage2D(camDepth, 1, GL_DEPTH_COMPONENT32F, c.sensor.x, c.sensor.y);
     glCreateFramebuffers(1, &camFbo);
     glNamedFramebufferTexture(camFbo, GL_COLOR_ATTACHMENT0, camTex, 0);
+    glNamedFramebufferTexture(camFbo, GL_DEPTH_ATTACHMENT, camDepth, 0);
     glCreateFramebuffers(1, &viewFbo);
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_PROGRAM_POINT_SIZE);
+    glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
     if (!c.objFile.empty()) loadObj(c.objFile);
 
     for (auto [tex, format] : {std::pair{&capH, GL_R16_SNORM}, std::pair{&capA, GL_RGB10_A2}}) {
@@ -145,18 +164,36 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     double kE = cfg->earthshine * 2.0 / 3 * 0.306 * std::pow(REARTH / dE, 2) * (std::sin(a) + (PI - a) * std::cos(a)) / PI * std::pow(dS / glm::length(SE), 2);
     FrameUBO f{glm::vec4(glm::vec3(s.sun / dS), std::asin(RSUN / dS)), glm::vec4(glm::vec3(s.earth / dE), std::asin(REARTH / dE)),
                glm::vec4(std::pow(AU / dS, 2), kE, std::tan(glm::radians(23.657)), cfg->gray),
-               sldem->window(), polar->window()};
-    ViewUBO vc = viewData(s.cam, cfg->sensor, 0), vv = viewData(s.view, fb, float(cfg->orbitGain));
+               sldem->window(), polar->window(), glm::mat3x4(glm::mat3(s.earthToMe))};
+    double starScale = STAR_PEAK / (cfg->orbitGain * PI * std::pow(10, -0.4 * (cfg->orbitStarMag - VSUN)));
+    ViewUBO vc = viewData(s.cam, cfg->sensor, 0, 0), vv = viewData(s.view, fb, float(cfg->orbitGain), float(starScale));
     glNamedBufferSubData(frameUbo, 0, sizeof f, &f);
     glNamedBufferSubData(camUbo, 0, sizeof vc, &vc);
     glNamedBufferSubData(viewUbo, 0, sizeof vv, &vv);
+    glm::vec4 planets[10];
+    for (int i = 0; i < 5; i++) planets[2 * i] = glm::vec4(s.planets[i].p), planets[2 * i + 1] = flux(s.planets[i]);
+    glNamedBufferSubData(skyBuf, 2 * stars * sizeof(glm::vec4), sizeof planets, planets);
+    glProgramUniformMatrix3fv(sky, 0, 1, GL_FALSE, glm::value_ptr(glm::mat3(s.j2000ToMe)));
 
-    GLuint tex[10] = {terrain->lola, terrain->albedo, terrain->hapke, sldem->tex, sldem->cover, camTex, capH, capA, polar->tex, polar->cover};
-    glBindTextures(0, 10, tex);
+    GLuint tex[11] = {terrain->lola, terrain->albedo, terrain->hapke, sldem->tex, sldem->cover, camTex, capH, capA, polar->tex, polar->cover, terrain->earth};
+    glBindTextures(0, 11, tex);
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, probeBuf);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, expBuf);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, skyBuf);
     glBindVertexArray(vao);
+    auto drawMoonAndSky = [&] {
+        glDepthFunc(GL_ALWAYS);
+        glUseProgram(moon);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDepthFunc(GL_GEQUAL);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glUseProgram(sky);
+        glDrawArrays(GL_POINTS, 0, stars + 5);
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+    };
 
     glUseProgram(probe);
     glUniform3fv(0, 1, glm::value_ptr(glm::vec3(s.sat)));
@@ -164,10 +201,9 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, camFbo);
     glViewport(0, 0, cfg->sensor.x, cfg->sensor.y);
-    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_DEPTH_TEST);
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, camUbo);
-    glUseProgram(moon);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    drawMoonAndSky();
 
     glUseProgram(hist);
     glDispatchCompute((cfg->sensor.x + 15) / 16, (cfg->sensor.y + 15) / 16, 1);
@@ -189,11 +225,8 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, viewFbo);
     glViewport(0, 0, fb.x, fb.y);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_ALWAYS);
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, viewUbo);
-    glUseProgram(moon);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    drawMoonAndSky();
 
     glDepthFunc(GL_GREATER);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);

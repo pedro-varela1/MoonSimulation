@@ -150,6 +150,24 @@ GLuint loadHapke(const std::string& dir) {
     return tex;
 }
 
+GLuint loadEarth(const std::string& path) {
+    TIFF* tf = openTiff(path);
+    uint32_t w, h;
+    TIFFGetField(tf, TIFFTAG_IMAGEWIDTH, &w);
+    TIFFGetField(tf, TIFFTAG_IMAGELENGTH, &h);
+    GLuint tex = texture2D(GL_SRGB8, w, h, levels(w, h), GL_CLAMP_TO_EDGE);
+    glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY, 16);
+    std::vector<uint8_t> band(size_t(w) * 3 * 256);
+    for (uint32_t y = 0; y < h; y += 256) {
+        uint32_t n = std::min(256u, h - y);
+        for (uint32_t r = 0; r < n; r++) TIFFReadScanline(tf, &band[size_t(r) * w * 3], y + r);
+        glTextureSubImage2D(tex, 0, 0, y, w, n, GL_RGB, GL_UNSIGNED_BYTE, band.data());
+    }
+    TIFFClose(tf);
+    glGenerateTextureMipmap(tex);
+    return tex;
+}
+
 }
 
 void Terrain::load(const Config& c) {
@@ -161,6 +179,7 @@ void Terrain::load(const Config& c) {
     fflush(stdout);
     albedo = loadAlbedo(c);
     hapke = loadHapke(c.hapkeDir);
+    earth = loadEarth(c.earthTexture);
 }
 
 Streamer::Streamer(int nx, int ny, int wx, int wy, bool w)

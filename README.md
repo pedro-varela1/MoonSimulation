@@ -8,6 +8,10 @@ Real-time OpenGL 4.6 visualization of a CubeSat in lunar orbit, in two windows:
   Hapke-normalized color (643/566/415 nm natural color), Hapke photometry, soft shadows from the solar disc,
   earthshine and auto-exposure.
 
+Both skies show the Hipparcos stars, the planets from Mercury to Saturn, the Earth (Blue Marble, rotating, with
+its phase and atmosphere) and the Sun. The camera is physical. The orbit window is illustrative: its stars are
+scaled to stay visible, and the Sun has a glow.
+
 Both windows use the same per-pixel ray caster. Nothing is written to disk.
 
 ## Requirements
@@ -32,9 +36,11 @@ Data (paths in `config.ini`):
 | `wac_643`, `wac_566`, `wac_415` | Float I/F tiles `WAC_HAPKE_<band>NM_E350*.IMG` (LROC PDS `DATA/MDR/WAC_HAPKE`), ±70° |
 | `lola_dem`, `kit_color` | [CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) `ldem_64.tif` and `lroc_color_poles.tif`, global fallback, and the kit's color beyond ±70° |
 | `spice_dir` | Every kernel in the folder is loaded: `naif0012.tls`, `de440s.bsp`, `moon_pa_de440_200625.bpc`, `moon_de440_220930.tf`, `pck00011.tpc` |
+| `star_catalog` | NAIF [`hipparcos.xdb.Z`](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/stars/) (118k stars), decompressed and converted to `hipparcos.bdb` with the SPICE `tobin` utility. Empty = no stars |
+| `earth_texture` | NASA Blue Marble with clouds, [`land_ocean_ice_cloud_8192.tif`](https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/57735/land_ocean_ice_cloud_8192.tif) |
 | `orbit_file` | STK report with `Time (UTCG)`, `LatitudeMoon`, `LongitudeMoon`, `AltitudeMoon (km)` |
 
-The hardware in use is an RTX 2070 SUPER (8 GB), which runs this with about 3.5 GB of
+The hardware in use is an RTX 2070 SUPER (8 GB), which runs this with about 3.7 GB of
 VRAM and under 1 GB of RAM.
 
 ## Build and run
@@ -55,6 +61,7 @@ most of it reading the 3.5 GB of float WAC tiles from disk.
 | `start_utc`, `speed` | Start time (empty = first row) and initial time factor |
 | `orbit_window`, `camera_window` | `x y width height` of each window |
 | `orbit_fov`, `orbit_gain` | Vertical FOV and fixed gain of the orbit view |
+| `orbit_star_mag` | Faintest star magnitude visible in the orbit view (6.5 ≈ naked eye) |
 | `sensor`, `fov` | Camera resolution and horizontal FOV |
 | `tilt`, `azimuth`, `roll` | Off-nadir angle; tilt direction relative to the velocity (0 = forward, 90 = right; the image top follows it); roll (positive turns the image clockwise) |
 | `color` | `natural` (643/566/415 nm) or `gray` (643 nm), in both windows |
@@ -92,6 +99,14 @@ most of it reading the 3.5 GB of float WAC tiles from disk.
   - Hapke 2012 photometry with the 1° parameter maps, as the ratio to the normalization geometry (60°, 0°, 60°).
   - Shadows are soft (fraction of the solar disc visible). Earthshine follows the Earth's phase and distance.
   - The camera auto-exposes on the 98th percentile of lit pixels.
+- **Sky**
+  - Stars are read from the SPICE EK catalog, carried to the start date with their proper motions, and rotated each frame with `pxform("J2000", "MOON_ME")`.
+  - Planets come from `de440s`, with V magnitudes from Mallama & Hilton (2018), including Saturn's rings.
+  - Each point source has its irradiance relative to the Sun, from its V magnitude and a blackbody color. Stars get their temperature from the spectral type; planets from B−V. The irradiance is spread over the pixel solid angle with a Gaussian PSF (σ = 0.6 px), in the same I/F units as the terrain.
+  - In the camera the exposure decides what is visible, as with a real camera: stars show on the night side (earthshine) but not next to sunlit ground.
+  - In the orbit window a star of magnitude `orbit_star_mag` peaks at ~24/255, and brighter stars keep their true ratios.
+  - The Earth is the Blue Marble texture as Lambert reflectance. It is scaled to the 0.306 albedo used for earthshine, oriented with `IAU_EARTH`, and seen through a single-scattering Rayleigh layer, which gives blue oceans and a bluish limb.
+  - The Sun is limb darkened (linear law per band). In the camera it has its true radiance; in the orbit window it is shown unsaturated with a glow.
 
 ## Limitations
 
@@ -99,5 +114,9 @@ most of it reading the 3.5 GB of float WAC tiles from disk.
   albedo mapped to I/F, so color detail is lower there (relief is still 60 m).
 - SLDEM2015 has north–south striping in parts of the far side. It shows in the images because
   the renderer reproduces the data.
-- No interreflection and no stars.
+- No interreflection.
+- With `tilt = 0` and `fov = 120` at 30 km the camera sees no sky: the horizon is ~79° from nadir, and the image corners ~68°.
+- The camera is a rectilinear (pinhole) lens: at 120° it stretches objects near the edges (about 2× in the corners), the Sun and craters alike.
+- The Earth's clouds are a fixed 2002 composite. At the current sizes the Earth is 16–34 px wide, so its atmosphere shows only as a tint and a ~1 px bluish rim.
+- The Earth does not eclipse the Sun in the terrain lighting.
 - Above ×150 the DEM streaming pauses and the 474 m LOLA is shown.
