@@ -9,7 +9,8 @@
 namespace {
 
 constexpr float HSCALE = 12, IF_SCALE = 0.25f;
-constexpr double R = 1737.4;
+constexpr double R = 1737.4, PC = 15520, PS = 0.06;
+constexpr int PN = 31040;
 
 TIFF* openTiff(const std::string& path) {
     TIFF* t = TIFFOpen(path.c_str(), "r");
@@ -105,7 +106,7 @@ GLuint loadAlbedo(const Config& c) {
                 for (int k = 0; k < TW; k++) {
                     size_t i = size_t(r) * TW + k, B = size_t(TW) * CHUNK;
                     glm::vec3 v(in[i], in[B + i], in[2 * B + i]);
-                    if (v.r > 0 && v.g > 0 && v.b > 0) last = v;
+                    if (v.r > 0 && std::abs(v.g / v.r - 0.875f) < 0.15f && std::abs(v.b / v.r - 0.6f) < 0.15f) last = v;
                     buf[i] = pack(kb ? glm::mix(kb[x0 + k], last, wgt) : last);
                 }
             }
@@ -152,6 +153,7 @@ GLuint loadHapke(const std::string& dir) {
 }
 
 void Terrain::load(const Config& c) {
+    TIFFSetWarningHandler(nullptr);
     printf("carregando LOLA...\n");
     fflush(stdout);
     lola = loadLola(c.lolaDem);
@@ -161,30 +163,35 @@ void Terrain::load(const Config& c) {
     hapke = loadHapke(c.hapkeDir);
 }
 
-Sldem::Sldem(const std::string& d) : dir(d) {
-    slot.fill(-1);
-    tex = texture2D(GL_R16_SNORM, 16384, 8192, 4, GL_REPEAT);
-    cover = texture2D(GL_R8, 64, 32, 1, GL_REPEAT);
-    threads.emplace_back(&Sldem::reader, this);
-    for (int i = 0; i < 2; i++) threads.emplace_back(&Sldem::decoder, this);
+Streamer::Streamer(int nx, int ny, int wx, int wy, bool w)
+    : NX(nx), NY(ny), WX(wx), WY(wy), wrap(w), slot(size_t(wx) * wy, -1), fade(size_t(wx) * wy) {
+    tex = texture2D(GL_R16_SNORM, WX * 256, WY * 256, 4, GL_REPEAT);
+    cover = texture2D(GL_R8, WX, WY, 1, GL_REPEAT);
 }
 
-Sldem::~Sldem() {
+void Streamer::start() {
+    threads.emplace_back(&Streamer::reader, this);
+    for (int i = 0; i < 2; i++) threads.emplace_back(&Streamer::decoder, this);
+}
+
+void Streamer::stop() {
     { std::lock_guard lk(m); running = false; }
     readCv.notify_all();
     decodeCv.notify_all();
     for (auto& t : threads) t.join();
 }
 
-void Sldem::update(const glm::dvec3& center, const std::vector<glm::dvec3>& path, double needKm, bool on, double dt) {
-    auto key = [](int tu, int ty) { return (long long)tu * 1024 + ty; };
-    auto slotOf = [](int tu, int ty) { return (ty & 31) * 64 + (tu & 63); };
-    double lat = glm::degrees(std::asin(center.z / glm::length(center))), lon = glm::degrees(std::atan2(center.y, center.x));
-    int cx = int(std::floor((lon < 0 ? lon + 360 : lon) * 2)) - 32, cy = std::clamp(int(std::floor((60 - lat) * 2)) - 16, 0, 208);
-    int dx = ((cx - x0) % 720 + 1080) % 720 - 360;
-    if (!placed || std::abs(x0 + dx) > 1440) { x0 = cx; y0 = cy; placed = true; slot.fill(-1); }
-    else if (std::abs(dx) > 4 || std::abs(cy - y0) > 4) { x0 += dx; y0 = cy; }
-    active = on;
+void Streamer::update(const glm::dvec3& center, const std::vector<glm::dvec3>& path, double needKm, bool on, double dt) {
+    auto key = [](int tag, int tu, int ty) { return ((long long)tu * 4096 + ty) * 2 + tag; };
+    auto slotOf = [&](int tu, int ty) { return (ty % WY + WY) % WY * WX + (tu % WX + WX) % WX; };
+    auto global = [&](int tu) { return wrap ? (tu % NX + NX) % NX : tu; };
+    int cx, cy, ct;
+    if (place(center, cx, cy, ct)) {
+        int dx = wrap ? ((cx - x0) % NX + NX * 3 / 2) % NX - NX / 2 : cx - x0;
+        if (!placed || ct != tag || std::abs(x0 + dx) > 2 * NX) { x0 = cx; y0 = cy; tag = ct; placed = true; std::fill(slot.begin(), slot.end(), -1); }
+        else if (std::abs(dx) > 4 || std::abs(cy - y0) > 4) { x0 += dx; y0 = cy; }
+    }
+    active = on && placed;
 
     std::vector<Tile> got;
     {
@@ -195,22 +202,23 @@ void Sldem::update(const glm::dvec3& center, const std::vector<glm::dvec3>& path
         for (auto& t : got) inflight.erase(t.id);
     }
     for (auto& t : got) {
-        int tx = t.id % 720, ty = t.id / 720, tu = x0 + ((tx - x0) % 720 + 720) % 720;
+        int tx = t.id % NX, ty = t.id / NX % NY, tu = wrap ? x0 + ((tx - x0) % NX + NX) % NX : tx;
         if (!t.valid) { dead.insert(t.id); continue; }
-        if (tu >= x0 + 64 || ty < y0 || ty >= y0 + 32) continue;
+        if (int(t.id / (NX * NY)) != tag || tu < x0 || tu >= x0 + WX || ty < y0 || ty >= y0 + WY) continue;
+        int s = slotOf(tu, ty);
         for (int k = 0, off = 0; k < 4; off += 65536 >> 2 * k, k++)
-            glTextureSubImage2D(tex, k, (tu & 63) * (256 >> k), (ty & 31) * (256 >> k), 256 >> k, 256 >> k, GL_RED, GL_SHORT, t.data.data() + off);
-        slot[slotOf(tu, ty)] = key(tu, ty);
-        fade[slotOf(tu, ty)] = 0;
+            glTextureSubImage2D(tex, k, s % WX * (256 >> k), s / WX * (256 >> k), 256 >> k, 256 >> k, GL_RED, GL_SHORT, t.data.data() + off);
+        slot[s] = key(tag, tu, ty);
+        fade[s] = 0;
     }
 
-    auto has = [&](int tu, int ty) { return tu >= x0 && tu < x0 + 64 && ty >= y0 && ty < y0 + 32 && slot[slotOf(tu, ty)] == key(tu, ty); };
-    std::array<uint8_t, 64 * 32> cov{};
+    auto has = [&](int tu, int ty) { return tu >= x0 && tu < x0 + WX && ty >= y0 && ty < y0 + WY && slot[slotOf(tu, ty)] == key(tag, tu, ty); };
+    std::vector<uint8_t> cov(size_t(WX) * WY);
     std::vector<std::pair<double, uint32_t>> order;
     double cosNeed = std::cos(needKm / R);
     resident = 0;
-    for (int ty = y0; ty < y0 + 32; ty++)
-        for (int tu = x0; tu < x0 + 64; tu++) {
+    for (int ty = y0; ty < y0 + WY; ty++)
+        for (int tu = x0; tu < x0 + WX; tu++) {
             int s = slotOf(tu, ty);
             if (has(tu, ty)) {
                 bool full = true;
@@ -221,80 +229,55 @@ void Sldem::update(const glm::dvec3& center, const std::vector<glm::dvec3>& path
                 continue;
             }
             fade[s] = 0;
-            uint32_t id = ty * 720 + (tu % 720 + 720) % 720;
-            if (dead.count(id)) continue;
-            double la = glm::radians(60 - (ty + 0.5) * 0.5), lo = glm::radians((tu + 0.5) * 0.5);
-            glm::dvec3 p(std::cos(la) * std::cos(lo), std::cos(la) * std::sin(lo), std::sin(la));
+            uint32_t i = id(tag, global(tu), ty);
+            if (dead.count(i)) continue;
+            glm::dvec3 p = tileCenter(tag, global(tu), ty);
             size_t k = 0;
             while (k < path.size() && glm::dot(p, path[k]) < cosNeed) k++;
-            order.push_back({k * 10.0 + std::acos(std::clamp(glm::dot(p, path[0]), -1.0, 1.0)), id});
+            order.push_back({k * 10.0 + std::acos(std::clamp(glm::dot(p, path[0]), -1.0, 1.0)), i});
         }
-    glTextureSubImage2D(cover, 0, 0, 0, 64, 32, GL_RED, GL_UNSIGNED_BYTE, cov.data());
+    glTextureSubImage2D(cover, 0, 0, 0, WX, WY, GL_RED, GL_UNSIGNED_BYTE, cov.data());
     std::sort(order.begin(), order.end());
     {
         std::lock_guard lk(m);
         need.clear();
-        if (on) for (auto& o : order) need.push_back(o.second);
+        if (active) for (auto& o : order) need.push_back(o.second);
         pending = int(inflight.size());
     }
     readCv.notify_one();
 }
 
-void Sldem::reader() {
-    static const char* rows[4] = {"30n_60n", "00n_30n", "30s_00s", "60s_30s"};
-    std::ifstream files[32];
-    std::vector<uint64_t> off[32], cnt[32];
+void Streamer::reader() {
     std::unique_lock lk(m);
     while (running) {
-        auto it = std::find_if(need.begin(), need.end(), [&](uint32_t id) { return !inflight.count(id); });
+        auto it = std::find_if(need.begin(), need.end(), [&](uint32_t i) { return !inflight.count(i); });
         if (it == need.end() || inflight.size() >= 256) { readCv.wait(lk); continue; }
-        int tx = *it % 720, ty = *it / 720, lo = tx, hi = tx;
+        int tx = *it % NX, ty = *it / NX % NY, tg = *it / (NX * NY), lo = tx, hi = tx;
         std::unordered_set<uint32_t> want(need.begin(), need.end());
-        auto ok = [&](int x) { uint32_t id = ty * 720 + x; return x / 90 == tx / 90 && want.count(id) && !inflight.count(id); };
+        auto ok = [&](int x) { return runKey(x) == runKey(tx) && want.count(id(tg, x, ty)) && !inflight.count(id(tg, x, ty)); };
         while (hi - lo < 31 && lo > 0 && ok(lo - 1)) lo--;
-        while (hi - lo < 31 && hi < 719 && ok(hi + 1)) hi++;
-        for (int x = lo; x <= hi; x++) inflight.insert(ty * 720 + x);
+        while (hi - lo < 31 && hi < NX - 1 && ok(hi + 1)) hi++;
+        for (int x = lo; x <= hi; x++) inflight.insert(id(tg, x, ty));
         lk.unlock();
-        int fi = ty / 60 * 8 + tx / 90;
-        if (!files[fi].is_open()) {
-            char name[64];
-            snprintf(name, sizeof name, "/sldem2015_512_%s_%03d_%03d_float.tif", rows[ty / 60], tx / 90 * 45, tx / 90 * 45 + 45);
-            TIFF* t = openTiff(dir + name);
-            uint64_t *o, *c;
-            TIFFGetField(t, TIFFTAG_TILEOFFSETS, &o);
-            TIFFGetField(t, TIFFTAG_TILEBYTECOUNTS, &c);
-            off[fi].assign(o, o + 5400);
-            cnt[fi].assign(c, c + 5400);
-            TIFFClose(t);
-            files[fi].open(dir + name, std::ios::binary);
-        }
-        size_t a = ty % 60 * 90 + lo % 90, b = a + hi - lo;
-        auto buf = std::make_shared<std::vector<char>>(off[fi][b] + cnt[fi][b] - off[fi][a]);
-        files[fi].seekg(off[fi][a]).read(buf->data(), buf->size());
+        std::vector<Job> out;
+        read(tg, ty, lo, hi, out);
         lk.lock();
-        for (int x = lo; x <= hi; x++)
-            jobs.push_back({uint32_t(ty * 720 + x), buf, size_t(off[fi][a + x - lo] - off[fi][a]), size_t(cnt[fi][a + x - lo])});
+        jobs.insert(jobs.end(), out.begin(), out.end());
         decodeCv.notify_all();
     }
 }
 
-void Sldem::decoder() {
-    std::vector<float> raw(65536);
+void Streamer::decoder() {
+    std::vector<float> km(65536);
     std::unique_lock lk(m);
     while (running) {
         if (jobs.empty()) { decodeCv.wait(lk); continue; }
         Job j = std::move(jobs.front());
         jobs.pop_front();
         lk.unlock();
-        Tile t{j.id, std::vector<int16_t>(87040), false};
-        uLongf n = 65536 * 4;
-        if (uncompress(reinterpret_cast<Bytef*>(raw.data()), &n, reinterpret_cast<const Bytef*>(j.buf->data() + j.at), j.size) == Z_OK && n == 65536 * 4) {
-            double sum = 0;
-            int valid = 0;
-            for (float h : raw) if (h > -1e30f) sum += h, valid++;
-            t.valid = valid > 32768;
-            float mean = valid ? float(sum / valid) : 0;
-            for (int i = 0; i < 65536; i++) t.data[i] = snorm(raw[i] > -1e30f ? raw[i] : mean);
+        Tile t{j.id, std::vector<int16_t>(87040), decode(j, km.data())};
+        if (t.valid) {
+            std::transform(km.begin(), km.end(), t.data.begin(), snorm);
             int16_t* s = t.data.data();
             for (int w = 128; w >= 32; s += 4 * w * w, w /= 2)
                 for (int y = 0; y < w; y++)
@@ -307,3 +290,87 @@ void Sldem::decoder() {
         ready.push_back(std::move(t));
     }
 }
+
+Sldem::Sldem(const std::string& d) : Streamer(720, 240, 64, 32, true), dir(d) { start(); }
+
+bool Sldem::place(const glm::dvec3& c, int& x, int& y, int& tag) const {
+    double lat = glm::degrees(std::asin(c.z / glm::length(c))), lon = glm::degrees(std::atan2(c.y, c.x));
+    x = int(std::floor((lon < 0 ? lon + 360 : lon) * 2)) - WX / 2;
+    y = std::clamp(int(std::floor((60 - lat) * 2)) - WY / 2, 0, NY - WY);
+    tag = 0;
+    return true;
+}
+
+glm::dvec3 Sldem::tileCenter(int, int tx, int ty) const {
+    double la = glm::radians(60 - (ty + 0.5) * 0.5), lo = glm::radians((tx + 0.5) * 0.5);
+    return {std::cos(la) * std::cos(lo), std::cos(la) * std::sin(lo), std::sin(la)};
+}
+
+void Sldem::read(int, int ty, int tx0, int tx1, std::vector<Job>& out) {
+    static const char* rows[4] = {"30n_60n", "00n_30n", "30s_00s", "60s_30s"};
+    int fi = ty / 60 * 8 + tx0 / 90;
+    if (!files[fi].is_open()) {
+        char name[64];
+        snprintf(name, sizeof name, "/sldem2015_512_%s_%03d_%03d_float.tif", rows[ty / 60], tx0 / 90 * 45, tx0 / 90 * 45 + 45);
+        TIFF* t = openTiff(dir + name);
+        uint64_t *o, *c;
+        TIFFGetField(t, TIFFTAG_TILEOFFSETS, &o);
+        TIFFGetField(t, TIFFTAG_TILEBYTECOUNTS, &c);
+        off[fi].assign(o, o + 5400);
+        cnt[fi].assign(c, c + 5400);
+        TIFFClose(t);
+        files[fi].open(dir + name, std::ios::binary);
+    }
+    size_t a = ty % 60 * 90 + tx0 % 90, b = a + tx1 - tx0;
+    auto buf = std::make_shared<std::vector<char>>(off[fi][b] + cnt[fi][b] - off[fi][a]);
+    files[fi].seekg(off[fi][a]).read(buf->data(), buf->size());
+    for (int x = tx0; x <= tx1; x++)
+        out.push_back({id(0, x, ty), buf, size_t(off[fi][a + x - tx0] - off[fi][a]), size_t(cnt[fi][a + x - tx0])});
+}
+
+bool Sldem::decode(const Job& j, float* km) const {
+    uLongf n = 65536 * 4;
+    if (uncompress(reinterpret_cast<Bytef*>(km), &n, reinterpret_cast<const Bytef*>(j.buf->data() + j.at), j.size) != Z_OK || n != 65536 * 4) return false;
+    double sum = 0;
+    int valid = 0;
+    for (int i = 0; i < 65536; i++) if (km[i] > -1e30f) sum += km[i], valid++;
+    float mean = valid ? float(sum / valid) : 0;
+    for (int i = 0; i < 65536; i++) if (km[i] <= -1e30f) km[i] = mean;
+    return valid > 32768;
+}
+
+PolarDem::PolarDem(const std::string& d) : Streamer((PN + 255) / 256, (PN + 255) / 256, 32, 32, false), dir(d) { start(); }
+
+bool PolarDem::place(const glm::dvec3& c, int& x, int& y, int& tag) const {
+    glm::dvec3 n = glm::normalize(c);
+    double p = n.z < 0 ? -1 : 1, t = 2 * R / (1 + p * n.z);
+    tag = p < 0;
+    x = std::clamp(int((PC + t * n.y / PS) / 256) - WX / 2, 0, NX - WX);
+    y = std::clamp(int((PC + p * t * n.x / PS) / 256) - WY / 2, 0, NY - WY);
+    return true;
+}
+
+glm::dvec3 PolarDem::tileCenter(int tag, int tx, int ty) const {
+    double p = tag ? -1 : 1, v = ((tx + 0.5) * 256 - PC) * PS, u = p * ((ty + 0.5) * 256 - PC) * PS, s = (u * u + v * v) / (4 * R * R);
+    return {u / (R * (1 + s)), v / (R * (1 + s)), p * (1 - s) / (1 + s)};
+}
+
+void PolarDem::read(int tag, int ty, int tx0, int tx1, std::vector<Job>& out) {
+    std::ifstream& f = files[tag];
+    if (!f.is_open()) f.open(dir + (tag ? "/ldem_60s_60m.img" : "/ldem_60n_60m.img"), std::ios::binary);
+    if (!f) { fprintf(stderr, "nao foi possivel ler o DEM polar em %s\n", dir.c_str()); exit(1); }
+    int c0 = tx0 * 256, c1 = std::min((tx1 + 1) * 256, PN), r0 = ty * 256, r1 = std::min(r0 + 256, PN);
+    size_t stride = size_t(c1 - c0) * 2;
+    auto buf = std::make_shared<std::vector<char>>(stride * (r1 - r0));
+    for (int r = r0; r < r1; r++) f.seekg((size_t(r) * PN + c0) * 2).read(buf->data() + (r - r0) * stride, stride);
+    for (int x = tx0; x <= tx1; x++) out.push_back({id(tag, x, ty), buf, size_t(x - tx0) * 512, stride});
+}
+
+bool PolarDem::decode(const Job& j, float* km) const {
+    const int16_t* dn = reinterpret_cast<const int16_t*>(j.buf->data());
+    int rows = int(j.buf->size() / j.size), cols = int(std::min<size_t>(256, (j.size - j.at) / 2)), stride = int(j.size / 2), col0 = int(j.at / 2);
+    for (int y = 0; y < 256; y++)
+        for (int x = 0; x < 256; x++) km[y * 256 + x] = dn[std::min(y, rows - 1) * stride + col0 + std::min(x, cols - 1)] * 0.0005f;
+    return true;
+}
+

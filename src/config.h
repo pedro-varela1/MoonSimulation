@@ -9,7 +9,7 @@
 #include <string>
 
 struct Config {
-    std::string orbitFile, spiceDir, sldemDir, wac643, wac566, wac415, kitColor, lolaDem, hapkeDir, objFile, startUtc;
+    std::string orbitFile, spiceDir, sldemDir, polarDir, wac643, wac566, wac415, kitColor, lolaDem, hapkeDir, objFile, startUtc;
     double objScale = 1, speed = 1, orbitFov = 45, orbitGain = 4, fov = 120, tilt = 0, azimuth = 0, roll = 0;
     glm::dvec3 objRotation{0};
     glm::ivec4 orbitWindow{100, 100, 1280, 800}, cameraWindow{1400, 100, 900, 900};
@@ -24,7 +24,7 @@ inline Config loadConfig(const char* path) {
     auto num = [](auto& v) { return [&v](std::istream& in) { in >> v; }; };
     auto vec = [](auto& v) { return [&v](std::istream& in) { for (int i = 0; i < v.length(); i++) in >> v[i]; }; };
     std::map<std::string, std::function<void(std::istream&)>> keys = {
-        {"orbit_file", str(c.orbitFile)}, {"spice_dir", str(c.spiceDir)}, {"sldem_dir", str(c.sldemDir)},
+        {"orbit_file", str(c.orbitFile)}, {"spice_dir", str(c.spiceDir)}, {"sldem_dir", str(c.sldemDir)}, {"polar_dir", str(c.polarDir)},
         {"wac_643", str(c.wac643)}, {"wac_566", str(c.wac566)}, {"wac_415", str(c.wac415)}, {"kit_color", str(c.kitColor)}, {"lola_dem", str(c.lolaDem)},
         {"hapke_dir", str(c.hapkeDir)}, {"obj_file", str(c.objFile)}, {"start_utc", str(c.startUtc)},
         {"obj_scale", num(c.objScale)}, {"obj_rotation", vec(c.objRotation)}, {"speed", num(c.speed)},

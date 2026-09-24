@@ -28,8 +28,9 @@ Data (paths in `config.ini`):
 | Key | Data |
 | --- | --- |
 | `sldem_dir` | SLDEM2015 512 ppd DEFLATE-tiled GeoTIFFs (`sldem2015_512_*_float.tif`), ±60° |
+| `polar_dir` | LOLA polar stereographic DEMs `ldem_60n_60m.img` / `ldem_60s_60m.img` (60 m/px, 60°–90°, [PDS LOLA GDR](https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img/)) |
 | `wac_643`, `wac_566`, `wac_415` | Float I/F tiles `WAC_HAPKE_<band>NM_E350*.IMG` (LROC PDS `DATA/MDR/WAC_HAPKE`), ±70° |
-| `lola_dem`, `kit_color` | [CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) `ldem_64.tif` and `lroc_color_poles.tif`, used beyond ±60°/±70° |
+| `lola_dem`, `kit_color` | [CGI Moon Kit](https://svs.gsfc.nasa.gov/4720/) `ldem_64.tif` and `lroc_color_poles.tif`, global fallback, and the kit's color beyond ±70° |
 | `spice_dir` | Every kernel in the folder is loaded: `naif0012.tls`, `de440s.bsp`, `moon_pa_de440_200625.bpc`, `moon_de440_220930.tf`, `pck00011.tpc` |
 | `orbit_file` | STK report with `Time (UTCG)`, `LatitudeMoon`, `LongitudeMoon`, `AltitudeMoon (km)` |
 
@@ -84,7 +85,9 @@ most of it reading the 3.5 GB of float WAC tiles from disk.
 - **Terrain**
   - Rays are marched against the DEM, with a bicubic B-spline when magnified.
   - SLDEM is streamed from disk in 0.5° tiles into a toroidal 32°×16° window. Tiles are read in contiguous runs, which suits an HDD, and loaded ahead along the ground track.
-  - LOLA covers the rest. Above 75° both LOLA and the albedo are resampled on the GPU once into an azimuthal polar grid, so the poles show no pinwheel.
+  - The 60 m LOLA polar DEM is streamed the same way into a 491 km polar-stereographic window around the next cap crossing, so SLDEM and the polar DEM join at 60° at the same resolution.
+  - The 474 m global LOLA fills everything else. Above 75° it and the albedo are resampled on the GPU once into an azimuthal polar grid, so the poles show no pinwheel.
+  - WAC texels with implausible band ratios (shadowed walls near ±70° where the Hapke normalization breaks down) are treated as missing.
 - **Light**
   - Hapke 2012 photometry with the 1° parameter maps, as the ratio to the normalization geometry (60°, 0°, 60°).
   - Shadows are soft (fraction of the solar disc visible). Earthshine follows the Earth's phase and distance.
@@ -92,9 +95,9 @@ most of it reading the 3.5 GB of float WAC tiles from disk.
 
 ## Limitations
 
-- Beyond ±60° (DEM) and ±70° (color) only 474 m/px LOLA and the kit's polar albedo exist, so
-  the camera view is smoother there.
+- Beyond ±70° there is no multispectral color: the caps use the kit's monochrome LOLA-derived
+  albedo mapped to I/F, so color detail is lower there (relief is still 60 m).
 - SLDEM2015 has north–south striping in parts of the far side. It shows in the images because
   the renderer reproduces the data.
 - No interreflection and no stars.
-- Above ×150 the SLDEM streaming pauses and LOLA is shown.
+- Above ×150 the DEM streaming pauses and the 474 m LOLA is shown.

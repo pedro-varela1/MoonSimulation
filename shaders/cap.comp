@@ -1,15 +1,15 @@
 layout(local_size_x = 16, local_size_y = 16) in;
-layout(binding = 0, r16_snorm) uniform writeonly image2D polarH;
-layout(binding = 1, rgb10_a2) uniform writeonly image2D polarA;
+layout(binding = 0, r16_snorm) uniform writeonly image2D capH;
+layout(binding = 1, rgb10_a2) uniform writeonly image2D capA;
 
 void main() {
-    ivec2 px = ivec2(gl_GlobalInvocationID.xy), size = imageSize(polarH);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy), size = imageSize(capH);
     if (any(greaterThanEqual(px, size))) return;
     bool south = px.x >= size.y;
     vec2 q = (vec2(px.x - (south ? size.y : 0), px.y) + 0.5) / float(size.y) * 2.0 - 1.0;
-    float rho = length(q) * POLAR_RHO;
+    float rho = length(q) * CAP_RHO;
     vec3 n = vec3((length(q) > 0.0 ? normalize(q) : vec2(1, 0)) * sin(rho), south ? -cos(rho) : cos(rho));
-    vec2 ll = lonLat(n), uv = kitUV(ll), g = vec2(POLAR_RHO / float(size.y) / (PI * max(cos(ll.y), 1e-4)), 2.0 * POLAR_RHO / float(size.y) / PI);
-    imageStore(polarH, px, vec4(textureGrad(lolaTex, uv, vec2(g.x, 0.0), vec2(0.0, g.y)).r));
-    imageStore(polarA, px, textureGrad(albedoTex, uv, vec2(g.x, 0.0), vec2(0.0, g.y)));
+    vec2 ll = lonLat(n), uv = kitUV(ll), g = vec2(CAP_RHO / float(size.y) / (PI * max(cos(ll.y), 1e-4)), 2.0 * CAP_RHO / float(size.y) / PI);
+    imageStore(capH, px, vec4(textureGrad(lolaTex, uv, vec2(g.x, 0.0), vec2(0.0, g.y)).r));
+    imageStore(capA, px, textureGrad(albedoTex, uv, vec2(g.x, 0.0), vec2(0.0, g.y)));
 }

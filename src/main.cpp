@@ -1,7 +1,6 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
-#include <tiffio.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -15,7 +14,7 @@
 
 namespace {
 
-constexpr double R = 1737.4;
+constexpr double R = 1737.4, POLAR_Z = 0.857167;  // sin 59°: SLDEM below, polar DEM above
 constexpr std::array<double, 10> SPEEDS{1, 2, 5, 10, 20, 50, 100, 200, 500, 1000};
 const std::array<glm::dvec3, 2> VIEW0{glm::dvec3(0, 0.3, 6000), glm::dvec3(0, 0.3, 1)};
 
@@ -23,7 +22,7 @@ struct App {
     Config cfg;
     Orbit orbit;
     Terrain terrain;
-    std::unique_ptr<Sldem> sldem;
+    std::unique_ptr<Streamer> sldem, polar;
     Renderer renderer;
     GLFWwindow *orbitWin = nullptr, *camWin = nullptr;
     double et0 = 0, t = 0, tStart = 0, speed = 1;
@@ -137,10 +136,10 @@ int main(int argc, char** argv) {
         if (type == GL_DEBUG_TYPE_ERROR || sev == GL_DEBUG_SEVERITY_HIGH) fprintf(stderr, "GL: %s\n", msg);
     }, nullptr);
     glfwSwapInterval(1);
-    TIFFSetWarningHandler(nullptr);
     a->terrain.load(a->cfg);
     a->sldem = std::make_unique<Sldem>(a->cfg.sldemDir);
-    a->renderer.init(a->cfg, a->terrain, *a->sldem);
+    a->polar = std::make_unique<PolarDem>(a->cfg.polarDir);
+    a->renderer.init(a->cfg, a->terrain, *a->sldem, *a->polar);
     glfwMakeContextCurrent(a->camWin);
     glfwSwapInterval(0);
     a->renderer.initCameraContext();
@@ -172,16 +171,17 @@ int main(int argc, char** argv) {
         for (int i = 0; i <= 1024; i++) s.track.push_back(a->orbit.at(std::clamp(a->t + (i / 1024.0 - 0.5) * a->orbit.period, a->orbit.begin(), a->orbit.end())).p);
         s.now = 512;
 
-        glm::dvec3 center = a->focus(a->t + std::min(2 * a->speed, 60.0));
-        for (double dt2 = 10; std::abs(center.z) > std::sin(glm::radians(60.0)) && dt2 < a->orbit.period; dt2 += 10) {
-            glm::dvec3 c = a->focus(a->t + dt2);
-            if (std::abs(c.z) < std::sin(glm::radians(58.0))) center = c;
-        }
+        auto ahead = [&](bool polarCap) {
+            glm::dvec3 c = a->focus(a->t + std::min(2 * a->speed, 60.0));
+            for (double dt2 = 10; (std::abs(c.z) > POLAR_Z) != polarCap && dt2 < a->orbit.period; dt2 += 10) c = a->focus(a->t + dt2);
+            return c;
+        };
         std::vector<glm::dvec3> path(64);
         for (int k = 0; k < 64; k++) path[k] = a->focus(a->t + 4.5 * k);
 
         glfwMakeContextCurrent(a->orbitWin);
-        a->sldem->update(center, path, needKm, a->speed <= 150, dt);
+        a->sldem->update(ahead(false), path, needKm, a->speed <= 150, dt);
+        a->polar->update(ahead(true), path, needKm, a->speed <= 150, dt);
         a->renderer.draw(s, fo);
         glfwMakeContextCurrent(a->camWin);
         a->renderer.present(fc);
@@ -193,11 +193,11 @@ int main(int argc, char** argv) {
         if (now - titleAt > 0.25) {
             double r = glm::length(st.p), fps = frames / (now - titleAt);
             char title[320];
-            snprintf(title, sizeof title, "Órbita — %s UTC — %s×%g — lat %.3f° lon %.3f° alt %.2f km — h %.2f km — Sol %.1f° — %.0f%% iluminado — SLDEM %d/%d — %.0f fps",
+            snprintf(title, sizeof title, "Órbita — %s UTC — %s×%g — lat %.3f° lon %.3f° alt %.2f km — h %.2f km — Sol %.1f° — %.0f%% iluminado — SLDEM %d/%d — polar %d/%d — %.0f fps",
                      ephem::utc(a->et0 + a->t).c_str(), a->paused ? "pausado " : "", a->speed, glm::degrees(std::asin(st.p.z / r)),
                      glm::degrees(std::atan2(st.p.y, st.p.x)), r - R, a->renderer.satAbove,
                      glm::degrees(std::asin(glm::dot(glm::normalize(s.sun), st.p / r))), a->renderer.satVis * 100, a->sldem->resident,
-                     a->sldem->pending, fps);
+                     a->sldem->pending, a->polar->resident, a->polar->pending, fps);
             glfwSetWindowTitle(a->orbitWin, title);
             snprintf(title, sizeof title, "Câmera — EV %.2f — %.0f fps", a->renderer.ev, fps);
             glfwSetWindowTitle(a->camWin, title);
@@ -206,5 +206,6 @@ int main(int argc, char** argv) {
         }
     }
     a->sldem.reset();
+    a->polar.reset();
     glfwTerminate();
 }

@@ -1,22 +1,24 @@
 const float R = 1737.4, HMAX = 11.0, HMIN = -9.2, HSCALE = 12.0, PI = 3.14159265, SLOPE = 0.8391, TEXEL = 0.0592253;
-const float POLAR_RHO = radians(16.0), IF_SCALE = 0.25;
+const float CAP_RHO = radians(16.0), IF_SCALE = 0.25, PC = 15520.0, PS = 0.06;
 
 layout(std140, binding = 0) uniform Frame {
-    vec4 sunDir, earthDir, light, sldemWin;
+    vec4 sunDir, earthDir, light, sldemWin, polarWin;
 };
 layout(binding = 0) uniform sampler2D lolaTex;
 layout(binding = 1) uniform sampler2D albedoTex;
 layout(binding = 2) uniform sampler2DArray hapkeTex;
 layout(binding = 3) uniform sampler2D sldemTex;
-layout(binding = 4) uniform sampler2D coverTex;
-layout(binding = 6) uniform sampler2D polarTex;
-layout(binding = 7) uniform sampler2D polarAlb;
+layout(binding = 4) uniform sampler2D sldemCover;
+layout(binding = 6) uniform sampler2D capHTex;
+layout(binding = 7) uniform sampler2D capATex;
+layout(binding = 8) uniform sampler2D polarTex;
+layout(binding = 9) uniform sampler2D polarCover;
 
 vec2 lonLat(vec3 n) { return vec2(atan(n.y, n.x), asin(clamp(n.z, -1.0, 1.0))); }
 vec2 kitUV(vec2 ll) { return vec2(ll.x / (2.0 * PI) + 0.5, 0.5 - ll.y / PI); }
-float polarWeight(vec2 ll) { return smoothstep(radians(75.0), radians(77.0), abs(ll.y)); }
-vec2 polarUV(vec3 n) {
-    vec2 q = (length(n.xy) > 1e-9 ? normalize(n.xy) : vec2(1, 0)) * acos(abs(n.z)) / POLAR_RHO;
+float capWeight(vec2 ll) { return smoothstep(radians(75.0), radians(77.0), abs(ll.y)); }
+vec2 capUV(vec3 n) {
+    vec2 q = (length(n.xy) > 1e-9 ? normalize(n.xy) : vec2(1, 0)) * acos(abs(n.z)) / CAP_RHO;
     return vec2((q.x * 0.5 + 0.5 + (n.z < 0.0 ? 1.0 : 0.0)) * 0.5, q.y * 0.5 + 0.5);
 }
 vec3 srgb(vec3 c) { return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
@@ -30,25 +32,29 @@ float sampleH(sampler2D tex, vec2 uv, float lod) {
            g1.y * (g0.x * textureLod(tex, vec2(h0.x, h1.y), 0.0).r + g1.x * textureLod(tex, h1, 0.0).r);
 }
 
-// SLDEM (toroidal 64x32-tile window) over LOLA; azimuthal polar grid above 75 deg
-float heightAt(vec3 n, float lod, out float w) {
-    vec2 ll = lonLat(n);
-    float h = 0.0;
+// streamed toroidal window: X in source texels, w = coverage weight
+float windowH(sampler2D tex, sampler2D cover, vec2 X, vec4 win, vec2 tiles, float lod, out float w) {
+    vec2 tile = X / 256.0 - win.xy;
     w = 0.0;
-    if (sldemWin.z > 0.0 && lod < 3.5) {
-        vec2 d = degrees(ll);
-        float c = sldemWin.x * 0.5 + 16.0;
-        vec2 X = vec2(c + mod(d.x - c + 180.0, 360.0) - 180.0, 60.0 - d.y) * 512.0;
-        vec2 tile = X / 256.0 - sldemWin.xy;
-        if (all(greaterThanEqual(tile, vec2(0.0))) && all(lessThan(tile, vec2(64.0, 32.0)))) {
-            w = textureLod(coverTex, X / vec2(16384.0, 8192.0), 0.0).r * (1.0 - smoothstep(2.5, 3.5, lod));
-            if (w > 0.0) h = sampleH(sldemTex, X / vec2(16384.0, 8192.0), min(lod, 3.0)) * HSCALE;
-        }
-    }
+    if (win.z <= 0.0 || lod >= 3.5 || any(lessThan(tile, vec2(0.0))) || any(greaterThanEqual(tile, tiles))) return 0.0;
+    w = textureLod(cover, X / 256.0 / tiles, 0.0).r * (1.0 - smoothstep(2.5, 3.5, lod));
+    return w > 0.0 ? sampleH(tex, X / (tiles * 256.0), min(lod, 3.0)) * HSCALE : 0.0;
+}
+
+// SLDEM 512 ppd, then LOLA 60 m polar stereographic, then LOLA 64 ppd (azimuthal cap grid above 75 deg)
+float heightAt(vec3 n, float lod, out float w) {
+    vec2 ll = lonLat(n), d = degrees(ll);
+    float c = sldemWin.x * 0.5 + 16.0, p = polarWin.w > 0.5 ? -1.0 : 1.0, wp = 0.0, t = 2.0 * R / (1.0 + p * n.z);
+    float h = windowH(sldemTex, sldemCover, vec2(c + mod(d.x - c + 180.0, 360.0) - 180.0, 60.0 - d.y) * 512.0, sldemWin, vec2(64.0, 32.0), lod, w);
     if (w < 1.0) {
-        float s = polarWeight(ll), g = s > 0.0 ? sampleH(polarTex, polarUV(n), lod - 3.0) : 0.0;
-        if (s < 1.0) g = mix(sampleH(lolaTex, kitUV(ll), lod - 3.0), g, s);
-        h = mix(g * HSCALE, h, w);
+        float hp = p * n.z > 0.5 ? windowH(polarTex, polarCover, PC + vec2(n.y, p * n.x) * t / PS, polarWin, vec2(32.0), lod, wp) : 0.0;
+        float s = capWeight(ll), g = 0.0;
+        if (wp < 1.0) {
+            g = s > 0.0 ? sampleH(capHTex, capUV(n), lod - 3.0) : 0.0;
+            if (s < 1.0) g = mix(sampleH(lolaTex, kitUV(ll), lod - 3.0), g, s);
+        }
+        h = mix(mix(g * HSCALE, hp, wp), h, w);
+        w += (1.0 - w) * wp;
     }
     return h;
 }
@@ -117,9 +123,9 @@ float visibility(vec3 p, vec3 L, float alpha, float fp) {
 
 vec3 albedoIF(vec3 n, vec2 gx, vec2 gy, float fp) {
     vec2 ll = lonLat(n);
-    float s = polarWeight(ll);
+    float s = capWeight(ll);
     vec3 dn = s < 1.0 ? textureGrad(albedoTex, kitUV(ll), gx, gy).rgb : vec3(0.0);
-    if (s > 0.0) dn = mix(dn, textureLod(polarAlb, polarUV(n), log2(fp / 0.474)).rgb, s);
+    if (s > 0.0) dn = mix(dn, textureLod(capATex, capUV(n), log2(fp / 0.474)).rgb, s);
     return dn * IF_SCALE;
 }
 
@@ -159,8 +165,10 @@ vec3 hapkeRatio(float mu0, float mu, float cg, Hapke P) {
         mue = chi * (cos(e) + sin(e) * tt * (cp * E2(i, ct) + s2 * E2(e, ct)) / D);
         S = mue / ee * cos(i) / ei * chi / (1.0 - f + f * chi * cos(e) / ee);
     }
+    mu0e = max(mu0e, 1e-4);
+    mue = max(mue, 1e-4);
     vec3 r = mu0e / (mu0e + mue) * (phase(cg, P.b, P.c) * (1.0 + P.bs0 / (1.0 + tan(0.5 * g) / P.hs)) + H(mu0e, P.w) * H(mue, P.w) - 1.0) * S;
     float e60 = eta(radians(60.0), tt, ct, chi);
     vec3 r60 = 0.5 * chi / (e60 + chi) * (phase(0.5, P.b, P.c) * (1.0 + P.bs0 / (1.0 + 0.577350 / P.hs)) + H(e60, P.w) * H(chi, P.w) - 1.0);
-    return r / r60;
+    return max(r / r60, 0.0);
 }
