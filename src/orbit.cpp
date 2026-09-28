@@ -24,6 +24,42 @@ template <class T> const char* parse(const char* s, const char* e, T& v) {
     return r.ec == std::errc() ? r.ptr : nullptr;
 }
 
+// STK report row: "7 Aug 2029 00:00:00.000  lat  lon  alt"
+struct Row {
+    int d, mo, y, hh, mm;
+    double ss, lat, lon, alt;
+    double time() const { return daysFromCivil(y, mo, d) * 86400.0 + hh * 3600 + mm * 60 + ss; }
+    std::string iso() const {
+        char s[40];
+        snprintf(s, sizeof s, "%04d-%02d-%02dT%02d:%02d:%06.3f", y, mo, d, hh, mm, ss);
+        return s;
+    }
+};
+
+bool parseRow(const char* q, const char* e, Row& r) {
+    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    if (!(q = parse(q, e, r.d))) return false;
+    while (q < e && *q == ' ') q++;
+    const char* m = e - q > 3 ? std::search(months, months + 36, q, q + 3) : months + 36;
+    r.mo = int(m - months) / 3 + 1;
+    return m < months + 36 && (q = parse(q + 3, e, r.y)) && (q = parse(q, e, r.hh)) && (q = parse(q, e, r.mm)) &&
+           (q = parse(q, e, r.ss)) && (q = parse(q, e, r.lat)) && (q = parse(q, e, r.lon)) && parse(q, e, r.alt);
+}
+
+// calls fn(row) for every data row after the "----" header line
+template <class F> void rows(const std::string& buf, bool header, F fn) {
+    bool data = !header;
+    for (const char *s = buf.data(), *end = s + buf.size(); s < end;) {
+        const char* e = static_cast<const char*>(memchr(s, '\n', end - s));
+        if (!e) e = end;
+        const char* q = s;
+        s = e + 1;
+        Row r;
+        if (!data) { while (q < e && *q == ' ') q++; data = e - q >= 4 && !strncmp(q, "----", 4); }
+        else if (parseRow(q, e, r)) fn(r);
+    }
+}
+
 void solve5(double A[5][5], double B[5][3]) {
     for (int c = 0; c < 5; c++) {
         int piv = c;
@@ -48,34 +84,15 @@ void Orbit::load(const std::string& path, const glm::dmat3& rot) {
     std::string buf(f.tellg(), '\0');
     f.seekg(0).read(buf.data(), buf.size());
 
-    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
     std::vector<glm::dvec3> raw;
     double t0 = 0;
-    bool data = false;
-    for (const char *s = buf.data(), *end = s + buf.size(); s < end;) {
-        const char* e = static_cast<const char*>(memchr(s, '\n', end - s));
-        if (!e) e = end;
-        const char* q = s;
-        s = e + 1;
-        if (!data) { while (q < e && *q == ' ') q++; data = e - q >= 4 && !strncmp(q, "----", 4); continue; }
-        int d, y, hh, mm;
-        double ss, lat, lon, alt;
-        if (!(q = parse(q, e, d))) continue;
-        while (q < e && *q == ' ') q++;
-        const char* m = e - q > 3 ? std::search(months, months + 36, q, q + 3) : months + 36;
-        if (m >= months + 36 || !(q = parse(q + 3, e, y)) || !(q = parse(q, e, hh)) || !(q = parse(q, e, mm)) ||
-            !(q = parse(q, e, ss)) || !(q = parse(q, e, lat)) || !(q = parse(q, e, lon)) || !parse(q, e, alt)) continue;
-        double tt = daysFromCivil(y, int(m - months) / 3 + 1, d) * 86400.0 + hh * 3600 + mm * 60 + ss;
-        if (t.empty()) {
-            t0 = tt;
-            char iso[40];
-            snprintf(iso, sizeof iso, "%04d-%02d-%02dT%02d:%02d:%06.3f", y, int(m - months) / 3 + 1, d, hh, mm, ss);
-            utc0 = iso;
-        }
-        double la = glm::radians(lat), lo = glm::radians(lon), r = R + alt;
-        t.push_back(tt - t0);
+    t.clear();
+    rows(buf, true, [&](const Row& w) {
+        if (t.empty()) t0 = w.time(), utc0 = w.iso();
+        double la = glm::radians(w.lat), lo = glm::radians(w.lon), r = R + w.alt;
+        t.push_back(w.time() - t0);
         raw.push_back(rot * (r * glm::dvec3(std::cos(la) * std::cos(lo), std::cos(la) * std::sin(lo), std::sin(la))));
-    }
+    });
     size_t n = t.size();
     if (n < 5) { fprintf(stderr, "orbita: dados insuficientes em %s\n", path.c_str()); exit(1); }
 
@@ -110,6 +127,23 @@ void Orbit::load(const std::string& path, const glm::dmat3& rot) {
     period = nodes.size() == 2 ? nodes[1] - nodes[0] : end() - begin();
     printf("orbita: %zu amostras, %.0f s, periodo %.1f s\n", n, end() - begin(), period);
     fflush(stdout);
+}
+
+bool Orbit::span(const std::string& path, std::string& first, double& seconds) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) return false;
+    size_t size = f.tellg();
+    std::string head(std::min<size_t>(size, 1 << 16), '\0'), tail(std::min<size_t>(size, 4096), '\0');
+    f.seekg(0).read(head.data(), head.size());
+    f.seekg(size - tail.size()).read(tail.data(), tail.size());
+    Row a{}, b{};
+    bool found = false;
+    rows(head, true, [&](const Row& r) { if (!found) a = r, found = true; });
+    rows(tail, false, [&](const Row& r) { b = r; });
+    if (!found || b.time() <= a.time()) return false;
+    first = a.iso();
+    seconds = b.time() - a.time();
+    return true;
 }
 
 State Orbit::at(double x) const {

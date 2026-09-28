@@ -29,10 +29,12 @@ GLuint texture2D(GLenum format, int w, int h, int levels, GLenum wrapT) {
     return t;
 }
 
+using Step = std::function<void(float)>;
+
 int levels(int w, int h) { return 1 + int(std::log2(std::max(w, h))); }
 int16_t snorm(float km) { return int16_t(std::lround(std::clamp(km / HSCALE, -1.f, 1.f) * 32767)); }
 
-GLuint loadLola(const std::string& path) {
+GLuint loadLola(const std::string& path, const Step& step) {
     TIFF* tf = openTiff(path);
     uint32_t w, h;
     TIFFGetField(tf, TIFFTAG_IMAGEWIDTH, &w);
@@ -43,6 +45,7 @@ GLuint loadLola(const std::string& path) {
     std::vector<int16_t> band(size_t(w) * 512);
     for (uint32_t y = 0; y < h; y += 512) {
         uint32_t n = std::min(512u, h - y);
+        step(float(y) / h);
         for (uint32_t r = 0; r < n; r++) {
             TIFFReadScanline(tf, row.data(), y + r);
             std::transform(row.begin(), row.end(), &band[size_t(r) * w], snorm);
@@ -54,7 +57,7 @@ GLuint loadLola(const std::string& path) {
     return tex;
 }
 
-GLuint loadAlbedo(const Config& c) {
+GLuint loadAlbedo(const Config& c, const Step& step) {
     constexpr int W = 27360, H = 13680, CAP = 1520, BLEND = 152, TW = 6840, CHUNK = 256;
     GLuint tex = texture2D(GL_RGB10_A2, W, H, levels(W, H), GL_CLAMP_TO_EDGE);
     glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY, 16);
@@ -72,6 +75,7 @@ GLuint loadAlbedo(const Config& c) {
     std::vector<uint8_t> line(TIFFScanlineSize(kit));
     auto kitIF = [&](int x) { const uint8_t* s = &line[size_t(x) * spp]; return c.kitGain * ((lut[s[0]] + lut[s[1]] + lut[s[2]]) / 3) + c.kitOffset; };
     for (int y = 0, n = 0; y < H; y++) {
+        if (y % CHUNK == 0) step(0.2f * y / H);
         TIFFReadScanline(kit, line.data(), y);
         if (y < CAP || y >= H - CAP) {
             for (int x = 0; x < W; x++) buf[size_t(n) * W + x] = pack(kitIF(x));
@@ -97,6 +101,7 @@ GLuint loadAlbedo(const Config& c) {
         }
         for (int y = 0; y < 5320; y += CHUNK) {
             int n = std::min(CHUNK, 5320 - y);
+            step(0.2f + 0.8f * (t * 5320 + y) / (8 * 5320));
             for (int b = 0; b < 3; b++) f[b].read(reinterpret_cast<char*>(&in[size_t(b) * TW * CHUNK]), size_t(TW) * 4 * n);
             for (int r = 0; r < n; r++) {
                 int ky = ky0 + y + r;
@@ -150,7 +155,7 @@ GLuint loadHapke(const std::string& dir) {
     return tex;
 }
 
-GLuint loadEarth(const std::string& path) {
+GLuint loadEarth(const std::string& path, const Step& step) {
     TIFF* tf = openTiff(path);
     uint32_t w, h;
     TIFFGetField(tf, TIFFTAG_IMAGEWIDTH, &w);
@@ -160,6 +165,7 @@ GLuint loadEarth(const std::string& path) {
     std::vector<uint8_t> band(size_t(w) * 3 * 256);
     for (uint32_t y = 0; y < h; y += 256) {
         uint32_t n = std::min(256u, h - y);
+        step(float(y) / h);
         for (uint32_t r = 0; r < n; r++) TIFFReadScanline(tf, &band[size_t(r) * w * 3], y + r);
         glTextureSubImage2D(tex, 0, 0, y, w, n, GL_RGB, GL_UNSIGNED_BYTE, band.data());
     }
@@ -170,16 +176,13 @@ GLuint loadEarth(const std::string& path) {
 
 }
 
-void Terrain::load(const Config& c) {
+void Terrain::load(const Config& c, const std::function<void(const char*, float)>& progress) {
     TIFFSetWarningHandler(nullptr);
-    printf("carregando LOLA...\n");
-    fflush(stdout);
-    lola = loadLola(c.lolaDem);
-    printf("carregando albedo (kit + WAC 643/566/415 nm)...\n");
-    fflush(stdout);
-    albedo = loadAlbedo(c);
+    auto stage = [&](const char* name, float a, float b) { return [=, &progress](float f) { progress(name, a + (b - a) * f); }; };
+    lola = loadLola(c.lolaDem, stage("Global relief (LOLA)", 0, 0.08f));
+    albedo = loadAlbedo(c, stage("Multispectral albedo (WAC 643/566/415 nm)", 0.08f, 0.94f));
     hapke = loadHapke(c.hapkeDir);
-    earth = loadEarth(c.earthTexture);
+    earth = loadEarth(c.earthTexture, stage("Earth texture (Blue Marble)", 0.94f, 1));
 }
 
 Streamer::Streamer(int nx, int ny, int wx, int wy, bool w)

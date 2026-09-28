@@ -102,10 +102,14 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     glCreateFramebuffers(1, &camFbo);
     glNamedFramebufferTexture(camFbo, GL_COLOR_ATTACHMENT0, camTex, 0);
     glNamedFramebufferTexture(camFbo, GL_DEPTH_ATTACHMENT, camDepth, 0);
+    glCreateTextures(GL_TEXTURE_2D, 1, &camView);
+    glTextureStorage2D(camView, 1 + int(std::log2(std::max(c.sensor.x, c.sensor.y))), GL_RGBA8, c.sensor.x, c.sensor.y);
+    glTextureParameteri(camView, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glCreateFramebuffers(1, &camViewFbo);
+    glNamedFramebufferTexture(camViewFbo, GL_COLOR_ATTACHMENT0, camView, 0);
     glCreateFramebuffers(1, &viewFbo);
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_PROGRAM_POINT_SIZE);
-    glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
     if (!c.objFile.empty()) loadObj(c.objFile);
 
     for (auto [tex, format] : {std::pair{&capH, GL_R16_SNORM}, std::pair{&capA, GL_RGB10_A2}}) {
@@ -127,8 +131,6 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     glGenerateTextureMipmap(capA);
     glDeleteProgram(cap);
 }
-
-void Renderer::initCameraContext() { glCreateVertexArrays(1, &vaoCam); }
 
 void Renderer::loadObj(const std::string& path) {
     tinyobj::ObjReader rd;
@@ -189,6 +191,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
         glDepthFunc(GL_GEQUAL);
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
         glUseProgram(sky);
         glDrawArrays(GL_POINTS, 0, stars + 5);
         glDisable(GL_BLEND);
@@ -211,6 +214,13 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glUseProgram(resolve);
     glUniform1f(0, float(s.dt));
     glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, camViewFbo);
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(show);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glGenerateTextureMipmap(camView);
+    glEnable(GL_DEPTH_TEST);
 
     if (fb != viewSize) {
         glDeleteTextures(1, &viewColor);
@@ -261,27 +271,9 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
         glDrawArrays(GL_POINTS, 0, 1);
     }
     glDisable(GL_DEPTH_TEST);
-    glBlitNamedFramebuffer(viewFbo, 0, 0, 0, fb.x, fb.y, 0, 0, fb.x, fb.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    glFlush();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     satVis = probeMap[0];
     satAbove = probeMap[1];
     ev = expMap[128];
 }
 
-void Renderer::present(glm::ivec2 fb) {
-    if (fence) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); glDeleteSync(fence); fence = nullptr; }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, fb.x, fb.y);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    double k = std::min(double(fb.x) / cfg->sensor.x, double(fb.y) / cfg->sensor.y);
-    int w = int(cfg->sensor.x * k), h = int(cfg->sensor.y * k);
-    glViewport((fb.x - w) / 2, (fb.y - h) / 2, w, h);
-    glBindVertexArray(vaoCam);
-    glUseProgram(show);
-    glBindTextureUnit(5, camTex);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUbo);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, expBuf);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-}

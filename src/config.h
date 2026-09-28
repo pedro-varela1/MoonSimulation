@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -12,7 +13,6 @@ struct Config {
     std::string orbitFile, spiceDir, sldemDir, polarDir, wac643, wac566, wac415, kitColor, lolaDem, hapkeDir, starCatalog, earthTexture, objFile, startUtc;
     double objScale = 1, speed = 1, orbitFov = 45, orbitGain = 4, orbitStarMag = 6.5, fov = 120, tilt = 0, azimuth = 0, roll = 0;
     glm::dvec3 objRotation{0};
-    glm::ivec4 orbitWindow{100, 100, 1280, 800}, cameraWindow{1400, 100, 900, 900};
     glm::ivec2 sensor{1024, 1024};
     bool gray = false, earthshine = true;
     glm::vec3 kitGain{1}, kitOffset{0};
@@ -29,7 +29,6 @@ inline Config loadConfig(const char* path) {
         {"hapke_dir", str(c.hapkeDir)}, {"star_catalog", str(c.starCatalog)}, {"earth_texture", str(c.earthTexture)},
         {"obj_file", str(c.objFile)}, {"start_utc", str(c.startUtc)},
         {"obj_scale", num(c.objScale)}, {"obj_rotation", vec(c.objRotation)}, {"speed", num(c.speed)},
-        {"orbit_window", vec(c.orbitWindow)}, {"camera_window", vec(c.cameraWindow)},
         {"orbit_fov", num(c.orbitFov)}, {"orbit_gain", num(c.orbitGain)}, {"orbit_star_mag", num(c.orbitStarMag)}, {"sensor", vec(c.sensor)},
         {"fov", num(c.fov)}, {"tilt", num(c.tilt)}, {"azimuth", num(c.azimuth)}, {"roll", num(c.roll)},
         {"color", [&](std::istream& in) { std::string v; in >> v; c.gray = v == "gray"; }}, {"earthshine", num(c.earthshine)},
@@ -49,4 +48,26 @@ inline Config loadConfig(const char* path) {
         else fprintf(stderr, "config: chave desconhecida '%s'\n", key.c_str());
     }
     return c;
+}
+
+// rewrites the values of the given keys in place, keeping comments and their column; missing keys are appended
+inline void saveConfig(const char* path, std::map<std::string, std::string> values) {
+    std::ifstream in(path, std::ios::binary);
+    std::string out;
+    for (std::string line; std::getline(in, line);) {
+        size_t eq = line.find('='), hash = line.find('#');
+        std::string key = eq < hash ? line.substr(0, eq) : "";
+        key.erase(key.find_last_not_of(" \t") + 1);
+        key.erase(0, key.find_first_not_of(" \t"));
+        if (auto v = values.find(key); v != values.end()) {
+            size_t end = hash != std::string::npos ? hash : line.size() - (!line.empty() && line.back() == '\r');
+            std::string value = " " + v->second;
+            if (hash != std::string::npos) value.resize(std::max(value.size() + 1, end - eq - 1), ' ');
+            line = line.substr(0, eq + 1) + value + line.substr(end);
+            values.erase(v);
+        }
+        out += line + '\n';
+    }
+    for (auto& [k, v] : values) out += k + " = " + v + '\n';
+    std::ofstream(path, std::ios::binary) << out;
 }

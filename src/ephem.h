@@ -10,6 +10,7 @@ struct Source { glm::dvec4 p; double vmag, teff; };
 
 void init(const std::string& kernelDir);
 double et(const std::string& utc);
+bool tryEt(const std::string& utc, double& et);  // false instead of aborting on an invalid time string
 std::string utc(double et);
 glm::dvec3 sun(double et);
 glm::dvec3 earth(double et);

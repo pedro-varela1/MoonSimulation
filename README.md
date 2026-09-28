@@ -1,18 +1,35 @@
 # Moon Simulation
 
-Real-time OpenGL 4.6 visualization of a CubeSat in lunar orbit, in two windows:
+Real-time OpenGL 4.6 visualization of a CubeSat in lunar orbit (SelenITA).
 
-- **Órbita** – the Moon lit by the real Sun, the CubeSat (OBJ model, or a marker), and
+The program opens on a **start screen**. It is pre-filled from `config.ini` and holds:
+- the orbit file (with a *Browse…* file dialog) and the start time;
+- the orbit view FOV;
+- the camera FOV, tilt, azimuth and roll;
+- the color mode and earthshine.
+
+The start time is checked against the file's range. The button starts only when every field is valid, and the values are then saved back to `config.ini`. A loading screen shows the progress.
+
+The simulation then fills the whole monitor the window was on, in one screen:
+
+- **Orbit** (large, left, interactive) – the Moon lit by the real Sun, the CubeSat (OBJ model, or a marker), and
   the orbit track for ±half a revolution. Free view or follow the satellite.
-- **Câmera** – what the CubeSat camera sees: SLDEM2015 512 ppd terrain, LROC WAC
-  Hapke-normalized color (643/566/415 nm natural color), Hapke photometry, soft shadows from the solar disc,
-  earthshine and auto-exposure.
+- **Camera** (right, view only) – what the CubeSat camera sees:
+  - SLDEM2015 512 ppd terrain;
+  - LROC WAC Hapke-normalized color (643/566/415 nm natural color) with Hapke photometry;
+  - soft shadows from the solar disc, earthshine and auto-exposure.
+- **Telemetry** (below the camera) – UTC, elapsed time, orbit number, satellite position, altitude, velocity,
+  illumination, camera pointing, exposure, ground sample distance, frame rate and streaming state.
+- **Controls** (bottom) – a timeline over the whole orbit file, time jumps, pause, speed, follow and reset the view, back to
+  the start screen, quit.
+
+The CEI, ITA, SelenITA and LINNA logos sit in the four corners.
 
 Both skies show the Hipparcos stars, the planets from Mercury to Saturn, the Earth (Blue Marble, rotating, with
-its phase and atmosphere) and the Sun. The camera is physical. The orbit window is illustrative: its stars are
+its phase and atmosphere) and the Sun. The camera is physical. The orbit view is illustrative: its stars are
 scaled to stay visible, and the Sun has a glow.
 
-Both windows use the same per-pixel ray caster. Nothing is written to disk.
+Both views use the same per-pixel ray caster. Nothing is written to disk except the start-screen values in `config.ini`.
 
 ## Requirements
 
@@ -26,6 +43,12 @@ Both windows use the same per-pixel ray caster. Nothing is written to disk.
 - **Hapke parameter maps** (Sato et al. 2014), into `assets/hapke/`:
   `WAC_HAPKEPARAMMAP_{643NM,566NM,415NM}.IMG` from the
   [LROC PDS](https://pds.mcp.nasa.gov/data/store/img/lunar_reconnaissance_orbiter/pds4/lroc/lro-l-lroc-5-rdr/LROLRC_2001/DATA/SDP/WAC_HAPKEPARAMMAP/).
+- **Interface**, all compiled into the executable:
+  - [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b (MIT) in `third_party/imgui/`: the core, plus the GLFW and OpenGL 3 backends;
+  - [`stb_image.h`](https://github.com/nothings/stb) in `third_party/`.
+- **Assets**:
+  - fonts in `assets/fonts/`: [Inter](https://github.com/rsms/inter) Regular/SemiBold and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) Regular, both SIL OFL;
+  - logos in `assets/logos/`: `logo - transp.png` (CEI), `ita-logo.png`, `Logo_new.png` (SelenITA, also the window icon), `linna_logo.png`.
 
 Data (paths in `config.ini`):
 
@@ -50,37 +73,46 @@ build.bat        # the first run also compiles CSPICE (~3 min)
 build.bat run    # or: MoonSimulation.exe [config.ini]
 ```
 
-Run from the project root, because shaders and assets are relative paths. Loading takes about 40 s,
-most of it reading the 3.5 GB of float WAC tiles from disk.
+Run from the project root, because shaders and assets are relative paths.
+
+The first start loads about 40 s of data, most of it the 3.5 GB of float WAC tiles on disk. Going back to the start screen and starting again only reloads the orbit, and only when its file changed.
 
 ## Configuration (`config.ini`)
+
+The start screen edits `orbit_file`, `start_utc`, `orbit_fov`, `fov`, `tilt`, `azimuth`, `roll`, `color` and `earthshine`,
+and writes them back to the file, keeping the comments. The other keys are set in the file only.
 
 | Key | Meaning |
 | --- | --- |
 | `obj_file`, `obj_scale`, `obj_rotation` | CubeSat model (empty = marker), units → meters, rotation in degrees X Y Z. Camera frame: x = image right, y = image top, −z = boresight |
 | `start_utc`, `speed` | Start time (empty = first row) and initial time factor |
-| `orbit_window`, `camera_window` | `x y width height` of each window |
 | `orbit_fov`, `orbit_gain` | Vertical FOV and fixed gain of the orbit view |
 | `orbit_star_mag` | Faintest star magnitude visible in the orbit view (6.5 ≈ naked eye) |
 | `sensor`, `fov` | Camera resolution and horizontal FOV |
 | `tilt`, `azimuth`, `roll` | Off-nadir angle; tilt direction relative to the velocity (0 = forward, 90 = right; the image top follows it); roll (positive turns the image clockwise) |
-| `color` | `natural` (643/566/415 nm) or `gray` (643 nm), in both windows |
+| `color` | `natural` (643/566/415 nm) or `gray` (643 nm), in both views |
 | `earthshine` | `1` lights the night side with earthshine, `0` turns it off |
 | `kit_gain`, `kit_offset` | Maps the kit's polar caps to I/F per band (fit on 65–70°) |
 
 ## Controls
 
-| Input | Action |
+All controls are buttons in the bottom bar. There are no keyboard shortcuts.
+
+| Control | Action |
 | --- | --- |
-| `Space` | Pause |
-| `↑` / `↓` | Speed ×1, 2, 5 … 1000 |
-| `Backspace` | Speed ×1 |
-| `→` / `←` | ±60 s (`Shift`: ±1 orbit, `Ctrl`: ±1 day) |
-| `Home` | Back to `start_utc` |
-| `F` | Toggle following the satellite |
-| `R` | Reset the view |
-| Left drag / wheel (orbit window) | Rotate / zoom |
-| `Esc` | Quit |
+| Timeline | Drag to any instant of the orbit file |
+| `Start` | Back to `start_utc` |
+| `« 1 day`, `« Orbit`, `‹ 60 s` / `60 s ›`, `Orbit »`, `1 day »` | Jump back / forward |
+| `‖ Pause` / `▶ Resume` | Pause or resume |
+| `▼` / `▲`, `×N` | Speed ×1, 2, 5 … 1000; clicking the speed resets it to ×1 |
+| `Follow satellite` | Toggle between the free view and following the satellite |
+| `↺ View` | Reset the orbit view |
+| `Settings` | Back to the start screen |
+| `Quit` | Quit |
+| Left drag / wheel on the orbit view | Rotate / zoom (the camera view is not interactive) |
+
+The executable asks hybrid-graphics drivers for the dedicated GPU (`NvOptimusEnablement`, `AmdPowerXpressRequestHighPerformance`).
+The GPU in use is shown in the telemetry panel.
 
 ## How it works
 
@@ -104,9 +136,9 @@ most of it reading the 3.5 GB of float WAC tiles from disk.
   - Planets come from `de440s`, with V magnitudes from Mallama & Hilton (2018), including Saturn's rings.
   - Each point source has its irradiance relative to the Sun, from its V magnitude and a blackbody color. Stars get their temperature from the spectral type; planets from B−V. The irradiance is spread over the pixel solid angle with a Gaussian PSF (σ = 0.6 px), in the same I/F units as the terrain.
   - In the camera the exposure decides what is visible, as with a real camera: stars show on the night side (earthshine) but not next to sunlit ground.
-  - In the orbit window a star of magnitude `orbit_star_mag` peaks at ~24/255, and brighter stars keep their true ratios.
+  - In the orbit view a star of magnitude `orbit_star_mag` peaks at ~24/255, and brighter stars keep their true ratios.
   - The Earth is the Blue Marble texture as Lambert reflectance. It is scaled to the 0.306 albedo used for earthshine, oriented with `IAU_EARTH`, and seen through a single-scattering Rayleigh layer, which gives blue oceans and a bluish limb.
-  - The Sun is limb darkened (linear law per band). In the camera it has its true radiance; in the orbit window it is shown unsaturated with a glow.
+  - The Sun is limb darkened (linear law per band). In the camera it has its true radiance; in the orbit view it is shown unsaturated with a glow.
 
 ## Limitations
 

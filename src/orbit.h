@@ -9,6 +9,7 @@ struct Orbit {
     std::string utc0;
     double period = 0;
     void load(const std::string& path, const glm::dmat3& rot);
+    static bool span(const std::string& path, std::string& first, double& seconds);  // first epoch (ISO UTC) and duration, cheap
     State at(double t) const;
     double begin() const { return t.front(); }
     double end() const { return t.back(); }

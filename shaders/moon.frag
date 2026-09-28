@@ -59,6 +59,6 @@ void main() {
     float t, dA = max(length(dx), length(dy));
     bool hit = castRay(eye.xyz, d, dA, t);
     vec3 L = hit ? terrain(d, dx, dy, t, dA) : discs(d, dA, t);
-    color = vec4(display(light.w > 0.5 ? L.rrr : L), hit ? 1.0 : 0.0);
+    color = vec4(display(light.w > 0.5 ? L.rrr : L), hit || eye.w > 0.0 ? 1.0 : 0.0);  // alpha: terrain mask for the camera exposure; the orbit view is opaque
     gl_FragDepth = t > 0.0 ? fwd.w / (t * dot(d, fwd.xyz)) : 0.0;
 }

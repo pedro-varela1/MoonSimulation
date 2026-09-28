@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -14,7 +15,7 @@
 
 struct Terrain {
     GLuint lola = 0, albedo = 0, hapke = 0, earth = 0;
-    void load(const Config& c);
+    void load(const Config& c, const std::function<void(const char* stage, float done)>& progress);
 };
 
 class Streamer {

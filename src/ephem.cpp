@@ -44,6 +44,18 @@ double et(const std::string& utc) {
     return e;
 }
 
+bool tryEt(const std::string& utc, double& e) {
+    char ret[] = "RETURN", abort[] = "ABORT", none[] = "NONE", all[] = "DEFAULT";
+    erract_c("SET", 0, ret);
+    errprt_c("SET", 0, none);
+    str2et_c(utc.c_str(), &e);
+    bool ok = !failed_c();
+    reset_c();
+    erract_c("SET", 0, abort);
+    errprt_c("SET", 0, all);
+    return ok;
+}
+
 std::string utc(double et) {
     char s[32];
     et2utc_c(et, "ISOC", 0, sizeof s, s);
