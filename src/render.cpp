@@ -1,4 +1,5 @@
 #include "render.h"
+#include "platform.h"
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -10,12 +11,12 @@ namespace {
 
 struct FrameUBO { glm::vec4 sunDir, earthDir, light, sldemWin, polarWin; glm::mat3x4 earthToMe; };
 struct ViewUBO { glm::vec4 eye, right, up, fwd, size; };
-constexpr double PI = 3.14159265358979, AU = 149597870.7, RSUN = 695700, REARTH = 6371, ZNEAR = 1e-5, VSUN = -26.74, TSUN = 5772;
+constexpr double PI = 3.14159265358979, AU = 149597870.7, RSUN = 695700, REARTH = 6371, RMOON = 1737.4, ZNEAR = 1e-5, VSUN = -26.74, TSUN = 5772;
 constexpr double STAR_PEAK = 0.009;  // orbit window: linear display value of a star at orbit_star_mag (sRGB ~24/255)
 
 std::string readFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
-    if (!f) { fprintf(stderr, "nao foi possivel abrir %s\n", path.c_str()); exit(1); }
+    if (!f) fatal("Could not open " + path);
     return {std::istreambuf_iterator<char>(f), {}};
 }
 
@@ -31,13 +32,16 @@ GLuint program(std::initializer_list<std::pair<GLenum, const char*>> stages, con
         glShaderSource(sh, 1, &s, nullptr);
         glCompileShader(sh);
         glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-        if (!ok) { glGetShaderInfoLog(sh, sizeof log, nullptr, log); fprintf(stderr, "%s (1 = common.glsl, 2 = %s):\n%s\n", file, file, log); exit(1); }
+        if (!ok) {
+            glGetShaderInfoLog(sh, sizeof log, nullptr, log);
+            fatal(std::string("The graphics driver could not compile the shader ") + file + " (source 1 = common.glsl, 2 = " + file + "):\n\n" + log);
+        }
         glAttachShader(p, sh);
         glDeleteShader(sh);
     }
     glLinkProgram(p);
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
-    if (!ok) { glGetProgramInfoLog(p, sizeof log, nullptr, log); fprintf(stderr, "link:\n%s\n", log); exit(1); }
+    if (!ok) { glGetProgramInfoLog(p, sizeof log, nullptr, log); fatal(std::string("The graphics driver could not link a shader program:\n\n") + log); }
     return p;
 }
 
@@ -87,6 +91,7 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     probeMap = static_cast<const float*>(glMapNamedBufferRange(probeBuf, 0, sizeof probe0, map));
     expMap = static_cast<const float*>(glMapNamedBufferRange(expBuf, 0, sizeof exp0, map));
     trackBuf = buffer(sizeof(glm::vec4) * 1025, nullptr, GL_DYNAMIC_STORAGE_BIT);
+    fovBuf = buffer(sizeof(glm::vec4) * 73, nullptr, GL_DYNAMIC_STORAGE_BIT);
     std::vector<glm::vec4> pts;
     for (auto& src : catalog) pts.insert(pts.end(), {glm::vec4(src.p), flux(src)});
     stars = int(catalog.size());
@@ -119,10 +124,15 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
         glTextureParameteri(*tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTextureParameteri(*tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
+    buildCaps();
+}
+
+// LOLA and albedo above 75 deg resampled once into the azimuthal polar grid
+void Renderer::buildCaps() {
     GLuint cap = program({{GL_COMPUTE_SHADER, "cap.comp"}});
     glUseProgram(cap);
-    glBindTextureUnit(0, t.lola);
-    glBindTextureUnit(1, t.albedo);
+    glBindTextureUnit(0, terrain->lola);
+    glBindTextureUnit(1, terrain->albedo);
     glBindImageTexture(0, capH, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R16_SNORM);
     glBindImageTexture(1, capA, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGB10_A2);
     glDispatchCompute(4096 / 16, 2048 / 16, 1);
@@ -132,11 +142,19 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     glDeleteProgram(cap);
 }
 
+int detectQuality(double& gb) {
+    GLint kb[4] = {};
+    if (GLEW_NVX_gpu_memory_info) glGetIntegerv(GL_GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX, kb);
+    else if (GLEW_ATI_meminfo) glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI, kb);
+    gb = kb[0] / 1048576.0;
+    return gb >= 5.5 ? 0 : gb >= 2.5 ? 1 : 2;
+}
+
 void Renderer::loadObj(const std::string& path) {
     tinyobj::ObjReader rd;
     tinyobj::ObjReaderConfig rc;
     rc.triangulate = true;
-    if (!rd.ParseFromFile(path, rc)) { fprintf(stderr, "obj: %s\n", rd.Error().c_str()); exit(1); }
+    if (!rd.ParseFromFile(path, rc)) fatal("Could not read the CubeSat model " + path + ":\n" + rd.Error());
     auto& a = rd.GetAttrib();
     auto& mats = rd.GetMaterials();
     std::vector<glm::vec4> v;
@@ -152,7 +170,6 @@ void Renderer::loadObj(const std::string& path) {
                 v.push_back(glm::vec4(p[k], 1));
                 v.push_back(glm::vec4(ix[k].normal_index >= 0 ? glm::make_vec3(&a.normals[3 * ix[k].normal_index]) : fn, 0));
                 v.push_back(glm::vec4(kd, 1));
-                meshRadius = std::max(meshRadius, glm::length(p[k]));
             }
         }
     meshVerts = int(v.size() / 3);
@@ -256,12 +273,35 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, trackBuf);
     glUniform1i(2, 0);
     glDrawArrays(GL_LINE_STRIP, 0, GLsizei(pts.size()));
+    if (s.showFov) {
+        // camera field of view: the four corner rays down to the Moon and the footprint outline (a ray missing the Moon stops at the horizon distance)
+        const Camera& c = s.cam;
+        auto ground = [&](double x, double y) {
+            glm::dvec3 d = glm::normalize(c.fwd + x * c.tanX * c.right + y * c.tanY * c.up);
+            double b = glm::dot(c.eye, d), disc = b * b - glm::dot(c.eye, c.eye) + RMOON * RMOON, t = -b - std::sqrt(std::max(disc, 0.0));
+            return glm::vec4(glm::vec3(c.eye + (disc > 0 && t > 0 ? t : std::sqrt(glm::dot(c.eye, c.eye) - RMOON * RMOON)) * d - v.eye), 1);
+        };
+        const double cx[5] = {-1, 1, 1, -1, -1}, cy[5] = {1, 1, -1, -1, 1};
+        std::vector<glm::vec4> fov;
+        for (int k = 0; k < 4; k++) fov.insert(fov.end(), {glm::vec4(glm::vec3(c.eye - v.eye), 1), ground(cx[k], cy[k])});
+        for (int k = 0; k < 4; k++)
+            for (int i = 0; i < 16; i++) fov.push_back(ground(glm::mix(cx[k], cx[k + 1], i / 16.0), glm::mix(cy[k], cy[k + 1], i / 16.0)));
+        fov.push_back(fov[1]);
+        glNamedBufferSubData(fovBuf, 0, fov.size() * sizeof(glm::vec4), fov.data());
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, fovBuf);
+        glUniform1i(2, 3);
+        glDrawArrays(GL_LINES, 0, 8);
+        glDrawArrays(GL_LINE_STRIP, 8, 65);
+    }
+    // the satellite at satScale times its size; enlarged, it is drawn over the Moon unless it is behind it
+    double dist = glm::length(s.sat - v.eye), b = glm::dot(v.eye, s.sat - v.eye) / dist, disc = b * b - glm::dot(v.eye, v.eye) + RMOON * RMOON;
+    double hit = -b - std::sqrt(std::max(disc, 0.0));
     if (meshVerts) {
-        double unit = cfg->objScale / 1000, dist = glm::length(s.sat - v.eye);
-        double scale = unit * std::max(1.0, 12 * 2 * v.tanY / fb.y * dist / (meshRadius * unit));
         glm::dvec3 r = glm::radians(cfg->objRotation);
         glm::dmat4 model = glm::translate(glm::dmat4(1), s.sat - v.eye) * glm::dmat4(s.att) * glm::rotate(glm::dmat4(1), r.z, {0, 0, 1}) *
-                           glm::rotate(glm::dmat4(1), r.y, {0, 1, 0}) * glm::rotate(glm::dmat4(1), r.x, {1, 0, 0}) * glm::scale(glm::dmat4(1), glm::dvec3(scale));
+                           glm::rotate(glm::dmat4(1), r.y, {0, 1, 0}) * glm::rotate(glm::dmat4(1), r.x, {1, 0, 0}) *
+                           glm::scale(glm::dmat4(1), glm::dvec3(cfg->objScale / 1000 * s.satScale));
+        if (s.satScale > 1 && !(disc > 0 && hit > 0 && hit < dist)) glClearDepth(0), glClear(GL_DEPTH_BUFFER_BIT);
         glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(glm::mat4(model)));
         glUniform1i(2, 2);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, meshBuf);

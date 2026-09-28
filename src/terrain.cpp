@@ -1,9 +1,11 @@
 #include "terrain.h"
+#include "platform.h"
 #include <tiffio.h>
 #include <zlib.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 
 namespace {
@@ -14,7 +16,7 @@ constexpr int PN = 31040;
 
 TIFF* openTiff(const std::string& path) {
     TIFF* t = TIFFOpen(path.c_str(), "r");
-    if (!t) { fprintf(stderr, "nao foi possivel abrir %s\n", path.c_str()); exit(1); }
+    if (!t) fatal("Could not open " + path);
     return t;
 }
 
@@ -34,39 +36,80 @@ using Step = std::function<void(float)>;
 int levels(int w, int h) { return 1 + int(std::log2(std::max(w, h))); }
 int16_t snorm(float km) { return int16_t(std::lround(std::clamp(km / HSCALE, -1.f, 1.f) * 32767)); }
 
-GLuint loadLola(const std::string& path, const Step& step) {
+// equirectangular map as a two-layer array (west and east halves), each padded with PAD columns of its neighbour so
+// filtering and mips see no seam and no side exceeds the 16384 texels AMD and Intel GPUs allow
+struct Halves {
+    static constexpr int PAD = 256;
+    GLuint tex = 0;
+    int w;
+    Halves(GLenum format, int w, int h) : w(w) {
+        glCreateTextures(GL_TEXTURE_2D_ARRAY, 1, &tex);
+        glTextureStorage3D(tex, levels(w / 2 + 2 * PAD, h), format, w / 2 + 2 * PAD, h, 2);
+        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTextureParameteri(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY, 16);
+    }
+    // n rows from y of the full-map columns [x, x + cw), stored with a row stride of cw texels
+    void put(int x, int y, int cw, int n, GLenum format, GLenum type, const void* data) const {
+        int lw = w / 2 + 2 * PAD;
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, cw);
+        for (int l = 0; l < 2; l++)
+            for (int k = 0; k < cw;) {
+                int lx = ((x + k - l * w / 2 + PAD) % w + w) % w, run = std::min(cw - k, w - lx);
+                if (lx < lw) {
+                    glPixelStorei(GL_UNPACK_SKIP_PIXELS, k);
+                    glTextureSubImage3D(tex, 0, lx, y, l, std::min(run, lw - lx), n, 1, format, type, data);
+                }
+                k += run;
+            }
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    }
+};
+
+// f = 1 full resolution, 2 = half (box filtered)
+GLuint loadLola(const std::string& path, int f, const Step& step) {
     TIFF* tf = openTiff(path);
     uint32_t w, h;
     TIFFGetField(tf, TIFFTAG_IMAGEWIDTH, &w);
     TIFFGetField(tf, TIFFTAG_IMAGELENGTH, &h);
-    GLuint tex = texture2D(GL_R16_SNORM, w, h, levels(w, h), GL_CLAMP_TO_EDGE);
-    glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY, 16);
-    std::vector<float> row(w);
-    std::vector<int16_t> band(size_t(w) * 512);
-    for (uint32_t y = 0; y < h; y += 512) {
-        uint32_t n = std::min(512u, h - y);
-        step(float(y) / h);
-        for (uint32_t r = 0; r < n; r++) {
-            TIFFReadScanline(tf, row.data(), y + r);
-            std::transform(row.begin(), row.end(), &band[size_t(r) * w], snorm);
+    int ow = w / f, oh = h / f;
+    Halves map(GL_R16_SNORM, ow, oh);
+    std::vector<float> row(w), sum(ow);
+    std::vector<int16_t> band(size_t(ow) * 256);
+    for (int y = 0, n = 0; y < oh; y++) {
+        std::fill(sum.begin(), sum.end(), 0.f);
+        for (int j = 0; j < f; j++) {
+            TIFFReadScanline(tf, row.data(), y * f + j);
+            for (uint32_t x = 0; x < w; x++) sum[x / f] += row[x];
         }
-        glTextureSubImage2D(tex, 0, 0, y, w, n, GL_RED, GL_SHORT, band.data());
+        for (int x = 0; x < ow; x++) band[size_t(n) * ow + x] = snorm(sum[x] / float(f * f));
+        if (++n == 256 || y == oh - 1) map.put(0, y + 1 - n, ow, n, GL_RED, GL_SHORT, band.data()), n = 0, step(float(y) / oh);
     }
     TIFFClose(tf);
-    glGenerateTextureMipmap(tex);
-    return tex;
+    glGenerateTextureMipmap(map.tex);
+    return map.tex;
 }
 
-GLuint loadAlbedo(const Config& c, const Step& step) {
+GLuint loadAlbedo(const Config& c, int f, const Step& step) {
     constexpr int W = 27360, H = 13680, CAP = 1520, BLEND = 152, TW = 6840, CHUNK = 256;
-    GLuint tex = texture2D(GL_RGB10_A2, W, H, levels(W, H), GL_CLAMP_TO_EDGE);
-    glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY, 16);
+    Halves map(GL_RGB10_A2, W / f, H / f);
     float lut[256];
     for (int i = 0; i < 256; i++) { float v = i / 255.f; lut[i] = v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); }
     auto pack = [](glm::vec3 v) { glm::uvec3 q(glm::clamp(v / IF_SCALE, 0.f, 1.f) * 1023.f + 0.5f); return q.r | q.g << 10 | q.b << 20 | 3u << 30; };
-    std::vector<uint32_t> buf(size_t(W) * CHUNK);
-    std::vector<glm::vec3> blend(size_t(W) * BLEND * 2);
-    auto upload = [&](int x, int y, int w, int n) { glTextureSubImage2D(tex, 0, x, y, w, n, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, buf.data()); };
+    std::vector<glm::vec3> rgb(size_t(W) * CHUNK), blend(size_t(W) * BLEND * 2);
+    std::vector<uint32_t> buf(rgb.size() / (f * f));
+    auto upload = [&](int x, int y, int w, int n) {  // box filtered by f, packed
+        int fw = w / f;
+        for (int r = 0; r < n / f; r++)
+            for (int k = 0; k < fw; k++) {
+                glm::vec3 s(0);
+                for (int j = 0; j < f; j++) for (int i = 0; i < f; i++) s += rgb[size_t(r * f + j) * w + k * f + i];
+                buf[size_t(r) * fw + k] = pack(s / float(f * f));
+            }
+        map.put(x / f, y / f, fw, n / f, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, buf.data());
+    };
     auto blendRow = [&](int y) { return y < CAP + BLEND ? &blend[size_t(y - CAP) * W] : &blend[size_t(y - (H - CAP - 2 * BLEND)) * W]; };
 
     TIFF* kit = openTiff(c.kitColor);
@@ -78,7 +121,7 @@ GLuint loadAlbedo(const Config& c, const Step& step) {
         if (y % CHUNK == 0) step(0.2f * y / H);
         TIFFReadScanline(kit, line.data(), y);
         if (y < CAP || y >= H - CAP) {
-            for (int x = 0; x < W; x++) buf[size_t(n) * W + x] = pack(kitIF(x));
+            for (int x = 0; x < W; x++) rgb[size_t(n) * W + x] = kitIF(x);
             if (++n == CHUNK || y == CAP - 1 || y == H - 1) upload(0, y + 1 - n, W, n), n = 0;
         } else if (y < CAP + BLEND || y >= H - CAP - BLEND)
             for (int x = 0; x < W; x++) blendRow(y)[x] = kitIF(x);
@@ -96,7 +139,7 @@ GLuint loadAlbedo(const Config& c, const Step& step) {
             char name[64];
             snprintf(name, sizeof name, "/WAC_HAPKE_%sNM_E350%c%04d.IMG", bands[b], north ? 'N' : 'S', 450 + t % 4 * 900);
             f[b].open(*dirs[b] + name, std::ios::binary | std::ios::ate);
-            if (!f[b]) { fprintf(stderr, "nao foi possivel abrir %s%s\n", dirs[b]->c_str(), name); exit(1); }
+            if (!f[b]) fatal("Could not open the WAC color tile " + *dirs[b] + name);
             f[b].seekg(size_t(f[b].tellg()) - size_t(TW) * 4 * 5320);
         }
         for (int y = 0; y < 5320; y += CHUNK) {
@@ -112,14 +155,14 @@ GLuint loadAlbedo(const Config& c, const Step& step) {
                     size_t i = size_t(r) * TW + k, B = size_t(TW) * CHUNK;
                     glm::vec3 v(in[i], in[B + i], in[2 * B + i]);
                     if (v.r > 0 && std::abs(v.g / v.r - 0.875f) < 0.15f && std::abs(v.b / v.r - 0.6f) < 0.15f) last = v;
-                    buf[i] = pack(kb ? glm::mix(kb[x0 + k], last, wgt) : last);
+                    rgb[i] = kb ? glm::mix(kb[x0 + k], last, wgt) : last;
                 }
             }
             upload(x0, ky0 + y, TW, n);
         }
     }
-    glGenerateTextureMipmap(tex);
-    return tex;
+    glGenerateTextureMipmap(map.tex);
+    return map.tex;
 }
 
 GLuint loadHapke(const std::string& dir) {
@@ -129,7 +172,7 @@ GLuint loadHapke(const std::string& dir) {
     for (int b = 0; b < 3; b++) {
         std::string path = dir + "/WAC_HAPKEPARAMMAP_" + bands[b] + ".IMG";
         std::ifstream f(path, std::ios::binary | std::ios::ate);
-        if (!f) { fprintf(stderr, "nao foi possivel abrir %s\n", path.c_str()); exit(1); }
+        if (!f) fatal("Could not open the Hapke parameter map " + path);
         m[b].resize(9 * N);
         f.seekg(size_t(f.tellg()) - m[b].size() * 4).read(reinterpret_cast<char*>(m[b].data()), m[b].size() * 4);
     }
@@ -155,19 +198,24 @@ GLuint loadHapke(const std::string& dir) {
     return tex;
 }
 
-GLuint loadEarth(const std::string& path, const Step& step) {
+GLuint loadEarth(const std::string& path, int f, const Step& step) {
     TIFF* tf = openTiff(path);
     uint32_t w, h;
     TIFFGetField(tf, TIFFTAG_IMAGEWIDTH, &w);
     TIFFGetField(tf, TIFFTAG_IMAGELENGTH, &h);
-    GLuint tex = texture2D(GL_SRGB8, w, h, levels(w, h), GL_CLAMP_TO_EDGE);
+    int ow = w / f, oh = h / f;
+    GLuint tex = texture2D(GL_SRGB8, ow, oh, levels(ow, oh), GL_CLAMP_TO_EDGE);
     glTextureParameterf(tex, GL_TEXTURE_MAX_ANISOTROPY, 16);
-    std::vector<uint8_t> band(size_t(w) * 3 * 256);
-    for (uint32_t y = 0; y < h; y += 256) {
-        uint32_t n = std::min(256u, h - y);
-        step(float(y) / h);
-        for (uint32_t r = 0; r < n; r++) TIFFReadScanline(tf, &band[size_t(r) * w * 3], y + r);
-        glTextureSubImage2D(tex, 0, 0, y, w, n, GL_RGB, GL_UNSIGNED_BYTE, band.data());
+    std::vector<uint8_t> line(size_t(w) * 3), band(size_t(ow) * 3 * 256);
+    std::vector<int> sum(size_t(ow) * 3);
+    for (int y = 0, n = 0; y < oh; y++) {
+        std::fill(sum.begin(), sum.end(), 0);
+        for (int j = 0; j < f; j++) {
+            TIFFReadScanline(tf, line.data(), y * f + j);
+            for (size_t i = 0; i < line.size(); i++) sum[i / 3 / f * 3 + i % 3] += line[i];
+        }
+        for (size_t i = 0; i < sum.size(); i++) band[size_t(n) * ow * 3 + i] = uint8_t((sum[i] + f * f / 2) / (f * f));
+        if (++n == 256 || y == oh - 1) glTextureSubImage2D(tex, 0, 0, y + 1 - n, ow, n, GL_RGB, GL_UNSIGNED_BYTE, band.data()), n = 0, step(float(y) / oh);
     }
     TIFFClose(tf);
     glGenerateTextureMipmap(tex);
@@ -176,22 +224,28 @@ GLuint loadEarth(const std::string& path, const Step& step) {
 
 }
 
-void Terrain::load(const Config& c, const std::function<void(const char*, float)>& progress) {
+void Terrain::load(const Config& c, int quality, const std::function<void(const char*, float)>& progress) {
     TIFFSetWarningHandler(nullptr);
+    GLuint old[4] = {lola, albedo, hapke, earth};
+    glDeleteTextures(4, old);
+    level = quality;
+    int f = quality > 0 ? 2 : 1;
     auto stage = [&](const char* name, float a, float b) { return [=, &progress](float f) { progress(name, a + (b - a) * f); }; };
-    lola = loadLola(c.lolaDem, stage("Global relief (LOLA)", 0, 0.08f));
-    albedo = loadAlbedo(c, stage("Multispectral albedo (WAC 643/566/415 nm)", 0.08f, 0.94f));
+    lola = loadLola(c.lolaDem, f, stage("Global relief (LOLA)", 0, 0.08f));
+    albedo = loadAlbedo(c, f, stage("Multispectral albedo (WAC 643/566/415 nm)", 0.08f, 0.94f));
     hapke = loadHapke(c.hapkeDir);
-    earth = loadEarth(c.earthTexture, stage("Earth texture (Blue Marble)", 0.94f, 1));
+    earth = loadEarth(c.earthTexture, quality > 1 ? 2 : 1, stage("Earth texture (Blue Marble)", 0.94f, 1));
 }
 
 Streamer::Streamer(int nx, int ny, int wx, int wy, bool w)
-    : NX(nx), NY(ny), WX(wx), WY(wy), wrap(w), slot(size_t(wx) * wy, -1), fade(size_t(wx) * wy) {
+    : NX(nx), NY(ny), WX(wx), WY(wy), wrap(w), slot(size_t(wx) * wy, -1), fade(size_t(wx) * wy) {}
+
+// a source whose files are not installed stays inactive and takes no video memory
+void Streamer::start(const std::string& probe) {
+    present = std::filesystem::exists(probe);
+    if (!present) return;
     tex = texture2D(GL_R16_SNORM, WX * 256, WY * 256, 4, GL_REPEAT);
     cover = texture2D(GL_R8, WX, WY, 1, GL_REPEAT);
-}
-
-void Streamer::start() {
     threads.emplace_back(&Streamer::reader, this);
     for (int i = 0; i < 2; i++) threads.emplace_back(&Streamer::decoder, this);
 }
@@ -204,6 +258,7 @@ void Streamer::stop() {
 }
 
 void Streamer::update(const glm::dvec3& center, const std::vector<glm::dvec3>& path, double needKm, bool on, double dt) {
+    if (!present) return;
     auto key = [](int tag, int tu, int ty) { return ((long long)tu * 4096 + ty) * 2 + tag; };
     auto slotOf = [&](int tu, int ty) { return (ty % WY + WY) % WY * WX + (tu % WX + WX) % WX; };
     auto global = [&](int tu) { return wrap ? (tu % NX + NX) % NX : tu; };
@@ -313,7 +368,7 @@ void Streamer::decoder() {
     }
 }
 
-Sldem::Sldem(const std::string& d) : Streamer(720, 240, 64, 32, true), dir(d) { start(); }
+Sldem::Sldem(const std::string& d) : Streamer(720, 240, 64, 32, true), dir(d) { start(dir + "/sldem2015_512_00n_30n_000_045_float.tif"); }
 
 bool Sldem::place(const glm::dvec3& c, int& x, int& y, int& tag) const {
     double lat = glm::degrees(std::asin(c.z / glm::length(c))), lon = glm::degrees(std::atan2(c.y, c.x));
@@ -361,7 +416,7 @@ bool Sldem::decode(const Job& j, float* km) const {
     return valid > 32768;
 }
 
-PolarDem::PolarDem(const std::string& d) : Streamer((PN + 255) / 256, (PN + 255) / 256, 32, 32, false), dir(d) { start(); }
+PolarDem::PolarDem(const std::string& d) : Streamer((PN + 255) / 256, (PN + 255) / 256, 32, 32, false), dir(d) { start(dir + "/ldem_60n_60m.img"); }
 
 bool PolarDem::place(const glm::dvec3& c, int& x, int& y, int& tag) const {
     glm::dvec3 n = glm::normalize(c);
@@ -380,7 +435,7 @@ glm::dvec3 PolarDem::tileCenter(int tag, int tx, int ty) const {
 void PolarDem::read(int tag, int ty, int tx0, int tx1, std::vector<Job>& out) {
     std::ifstream& f = files[tag];
     if (!f.is_open()) f.open(dir + (tag ? "/ldem_60s_60m.img" : "/ldem_60n_60m.img"), std::ios::binary);
-    if (!f) { fprintf(stderr, "nao foi possivel ler o DEM polar em %s\n", dir.c_str()); exit(1); }
+    if (!f) fatal("Could not read the polar DEM in " + dir);
     int c0 = tx0 * 256, c1 = std::min((tx1 + 1) * 256, PN), r0 = ty * 256, r1 = std::min(r0 + 256, PN);
     size_t stride = size_t(c1 - c0) * 2;
     auto buf = std::make_shared<std::vector<char>>(stride * (r1 - r0));

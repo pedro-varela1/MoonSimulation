@@ -1,13 +1,13 @@
 const float R = 1737.4, HMAX = 11.0, HMIN = -9.2, HSCALE = 12.0, PI = 3.14159265, SLOPE = 0.8391, TEXEL = 0.0592253;
-const float CAP_RHO = radians(16.0), IF_SCALE = 0.25, PC = 15520.0, PS = 0.06, PSF_SIGMA = 0.6, PSF_SIZE = 5.0;
+const float CAP_RHO = radians(16.0), IF_SCALE = 0.25, PC = 15520.0, PS = 0.06, PSF_SIGMA = 0.6, PSF_SIZE = 5.0, PAD = 256.0;
 
 layout(std140, binding = 0) uniform Frame {
     vec4 sunDir, earthDir, light, sldemWin, polarWin;
     mat3 earthToMe;
 };
 layout(std140, binding = 1) uniform View { vec4 eye, right, up, fwd, size; };
-layout(binding = 0) uniform sampler2D lolaTex;
-layout(binding = 1) uniform sampler2D albedoTex;
+layout(binding = 0) uniform sampler2DArray lolaTex;
+layout(binding = 1) uniform sampler2DArray albedoTex;
 layout(binding = 2) uniform sampler2DArray hapkeTex;
 layout(binding = 3) uniform sampler2D sldemTex;
 layout(binding = 4) uniform sampler2D sldemCover;
@@ -27,13 +27,37 @@ vec2 capUV(vec3 n) {
 vec3 srgb(vec3 c) { return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 vec3 display(vec3 L) { return eye.w > 0.0 ? srgb(clamp(eye.w * L, 0.0, 1.0)) : L; }
 
+// equirectangular map stored as two padded halves (layer 0 west of 0 deg, layer 1 east): layer coordinates and the u gradient scale
+vec3 halves(sampler2DArray t, vec2 uv, out float k) {
+    float lw = float(textureSize(t, 0).x), w = 2.0 * (lw - 2.0 * PAD), l = step(0.5, uv.x);
+    k = w / lw;
+    return vec3((PAD + (uv.x - 0.5 * l) * w) / lw, uv.y, l);
+}
+float lolaTexel() { return PI * R / (float(textureSize(lolaTex, 0).x) - 2.0 * PAD); }  // km
+
+// cubic B-spline as four bilinear taps: tap corners h0, h1 and the weights g0 of the h0 taps
+void bspline(vec2 uv, vec2 size, out vec2 h0, out vec2 h1, out vec2 g0) {
+    vec2 p = uv * size - 0.5, f = fract(p), i = p - f, f2 = f * f, f3 = f2 * f;
+    vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0, w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0, w3 = f3 / 6.0;
+    g0 = w0 + w1;
+    h0 = (i - 0.5 + w1 / g0) / size;
+    h1 = (i + 1.5 + w3 / (1.0 - g0)) / size;
+}
+
 float sampleH(sampler2D tex, vec2 uv, float lod) {
     if (lod > 0.5) return textureLod(tex, uv, lod).r;
-    vec2 size = vec2(textureSize(tex, 0)), p = uv * size - 0.5, f = fract(p), i = p - f, f2 = f * f, f3 = f2 * f;
-    vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0, w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0, w3 = f3 / 6.0;
-    vec2 g0 = w0 + w1, g1 = 1.0 - g0, h0 = (i - 0.5 + w1 / g0) / size, h1 = (i + 1.5 + w3 / g1) / size;
-    return g0.y * (g0.x * textureLod(tex, h0, 0.0).r + g1.x * textureLod(tex, vec2(h1.x, h0.y), 0.0).r) +
-           g1.y * (g0.x * textureLod(tex, vec2(h0.x, h1.y), 0.0).r + g1.x * textureLod(tex, h1, 0.0).r);
+    vec2 h0, h1, g0;
+    bspline(uv, vec2(textureSize(tex, 0)), h0, h1, g0);
+    return mix(mix(textureLod(tex, h1, 0.0).r, textureLod(tex, vec2(h0.x, h1.y), 0.0).r, g0.x),
+               mix(textureLod(tex, vec2(h1.x, h0.y), 0.0).r, textureLod(tex, h0, 0.0).r, g0.x), g0.y);
+}
+
+float sampleH(sampler2DArray tex, vec3 c, float lod) {
+    if (lod > 0.5) return textureLod(tex, c, lod).r;
+    vec2 h0, h1, g0;
+    bspline(c.xy, vec2(textureSize(tex, 0).xy), h0, h1, g0);
+    return mix(mix(textureLod(tex, vec3(h1, c.z), 0.0).r, textureLod(tex, vec3(h0.x, h1.y, c.z), 0.0).r, g0.x),
+               mix(textureLod(tex, vec3(h1.x, h0.y, c.z), 0.0).r, textureLod(tex, vec3(h0, c.z), 0.0).r, g0.x), g0.y);
 }
 
 // streamed toroidal window: X in source texels, w = coverage weight
@@ -52,10 +76,10 @@ float heightAt(vec3 n, float lod, out float w) {
     float h = windowH(sldemTex, sldemCover, vec2(c + mod(d.x - c + 180.0, 360.0) - 180.0, 60.0 - d.y) * 512.0, sldemWin, vec2(64.0, 32.0), lod, w);
     if (w < 1.0) {
         float hp = p * n.z > 0.5 ? windowH(polarTex, polarCover, PC + vec2(n.y, p * n.x) * t / PS, polarWin, vec2(32.0), lod, wp) : 0.0;
-        float s = capWeight(ll), g = 0.0;
+        float s = capWeight(ll), g = 0.0, k;
         if (wp < 1.0) {
             g = s > 0.0 ? sampleH(capHTex, capUV(n), lod - 3.0) : 0.0;
-            if (s < 1.0) g = mix(sampleH(lolaTex, kitUV(ll), lod - 3.0), g, s);
+            if (s < 1.0) g = mix(sampleH(lolaTex, halves(lolaTex, kitUV(ll), k), lod - log2(lolaTexel() / TEXEL)), g, s);
         }
         h = mix(mix(g * HSCALE, hp, wp), h, w);
         w += (1.0 - w) * wp;
@@ -68,7 +92,7 @@ float heightAt(vec3 n, float lod) { float w; return heightAt(n, lod, w); }
 vec3 normalAt(vec3 n0, float lod) {
     float w;
     heightAt(n0, lod, w);
-    float e = max(max(TEXEL * exp2(max(lod, 0.0)), 0.03), (1.0 - w) * 0.24) / R;
+    float e = max(max(TEXEL * exp2(max(lod, 0.0)), 0.03), (1.0 - w) * 0.5 * lolaTexel()) / R;
     vec3 t1 = normalize(cross(n0, abs(n0.z) < 0.9 ? vec3(0, 0, 1) : vec3(1, 0, 0))), t2 = cross(n0, t1);
     float dx = heightAt(normalize(n0 + e * t1), lod) - heightAt(normalize(n0 - e * t1), lod);
     float dy = heightAt(normalize(n0 + e * t2), lod) - heightAt(normalize(n0 - e * t2), lod);
@@ -127,8 +151,8 @@ float visibility(vec3 p, vec3 L, float alpha, float fp) {
 
 vec3 albedoIF(vec3 n, vec2 gx, vec2 gy, float fp) {
     vec2 ll = lonLat(n);
-    float s = capWeight(ll);
-    vec3 dn = s < 1.0 ? textureGrad(albedoTex, kitUV(ll), gx, gy).rgb : vec3(0.0);
+    float s = capWeight(ll), k;
+    vec3 c = halves(albedoTex, kitUV(ll), k), dn = s < 1.0 ? textureGrad(albedoTex, c, gx * vec2(k, 1.0), gy * vec2(k, 1.0)).rgb : vec3(0.0);
     if (s > 0.0) dn = mix(dn, textureLod(capATex, capUV(n), log2(fp / 0.474)).rgb, s);
     return dn * IF_SCALE;
 }

@@ -63,8 +63,28 @@ Data (paths in `config.ini`):
 | `earth_texture` | NASA Blue Marble with clouds, [`land_ocean_ice_cloud_8192.tif`](https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/57735/land_ocean_ice_cloud_8192.tif) |
 | `orbit_file` | STK report with `Time (UTCG)`, `LatitudeMoon`, `LongitudeMoon`, `AltitudeMoon (km)` |
 
-The hardware in use is an RTX 2070 SUPER (8 GB), which runs this with about 3.7 GB of
-VRAM and under 1 GB of RAM.
+SLDEM and the polar DEM are optional. When their folder is missing, the global 474 m LOLA is used instead.
+
+## Hardware and quality
+
+The simulator needs OpenGL 4.6: an NVIDIA, AMD or Intel GPU with a current driver. Without it, a dialog explains why the simulator cannot start.
+
+The start screen has a **Quality** setting (`quality` = `auto`, `high`, `medium` or `low`):
+
+| Level | Global LOLA and albedo | Earth texture | Orbit view | Video memory |
+| --- | --- | --- | --- | --- |
+| High | full resolution | 8192 × 4096 | full resolution | ~3.6 GB |
+| Medium | half resolution | 8192 × 4096 | full resolution | ~1.6 GB |
+| Low | half resolution | 4096 × 2048 | half resolution | ~1.4 GB |
+
+The camera always renders at the sensor resolution. `auto` chooses the level from the video memory the driver reports:
+- High from 5.5 GB;
+- Medium from 2.5 GB;
+- Low below that. It is also used for integrated GPUs and when the driver reports no memory (Intel).
+
+The global maps are stored as two texture-array halves, each padded with 256 columns of its neighbour, so no texture side exceeds the 16384 texels AMD and Intel allow. NVIDIA allows 32768. Changing the quality after the first start reloads only those maps.
+
+The development machine (RTX 2070 SUPER, 8 GB) runs High at 60 fps with under 1 GB of RAM.
 
 ## Build and run
 
@@ -73,21 +93,52 @@ build.bat        # the first run also compiles CSPICE (~3 min)
 build.bat run    # or: MoonSimulation.exe [config.ini]
 ```
 
-Run from the project root, because shaders and assets are relative paths.
+The executable has no console window. Fatal errors appear as dialogs, for example a missing data file, a shader the driver rejects, or not enough video memory. For a console build, use `mingw32-make SUBSYSTEM=`.
 
-The first start loads about 40 s of data, most of it the 3.5 GB of float WAC tiles on disk. Going back to the start screen and starting again only reloads the orbit, and only when its file changed.
+The executable changes to its own folder at start, so relative paths in `config.ini` resolve next to it, from any shortcut.
+
+The first start loads about 40 s of data, most of it the 3.5 GB of float WAC tiles on disk. Going back to the start screen and starting again reloads only what changed:
+- the orbit, when its file changed;
+- the global maps, when the quality changed.
+
+## Installer
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build.ps1            # full installer (~41 GB), needs Inno Setup 6 in D:\LINNA\tools\InnoSetup6
+powershell -ExecutionPolicy Bypass -File installer\build.ps1 -Compact   # compact installer (~5 GB), without SLDEM and the polar DEM
+```
+
+Both variants install the same application. The compact one goes to `D:\LINNA\installer\output-compact` as `SelenITA-Setup-1.0.0-Compact.exe`, and running the full installer later over it only adds the high-resolution terrain.
+
+`installer/build.ps1` does the following:
+1. Builds the release executable.
+2. Stages it in `D:\LINNA\installer\stage` with:
+   - the MSYS2 DLLs it loads (found with `ldd`) and their licenses;
+   - the shaders, fonts and logos;
+   - a `config.ini` with relative `data/...` paths and `quality = auto`.
+3. Runs Inno Setup on `installer/selenita.iss`.
+
+The installer takes only the files the simulator reads, straight from the paths in `config.ini`: the eight WAC `.IMG` tiles per band, the 32 SLDEM float TIFFs, the two polar `.img`, the SPICE kernels, `hipparcos.bdb`, the three Hapke maps, the kit maps and the Earth texture. The orbit files are the configured `orbit_file` plus those listed in `installer/orbits.txt`, all in `data/orbits`. The CubeSat model (`obj_file` and its `.mtl`) goes to `data/model`.
+
+The output is `D:\LINNA\installer\output\SelenITA-Setup-1.0.0.exe` plus 2 GB `.bin` slices, which must stay next to the `.exe`. The installer:
+- installs per user, with no administrator rights, into a folder of the user's choice;
+- offers Full (~43 GB) or Compact (~5 GB, without SLDEM and the polar DEM);
+- adds a Start menu entry and an optional desktop shortcut, and registers an uninstaller;
+- on reinstall, keeps the user's `config.ini`.
 
 ## Configuration (`config.ini`)
 
-The start screen edits `orbit_file`, `start_utc`, `orbit_fov`, `fov`, `tilt`, `azimuth`, `roll`, `color` and `earthshine`,
+The start screen edits `orbit_file`, `start_utc`, `orbit_fov`, `fov`, `tilt`, `azimuth`, `roll`, `color`, `earthshine` and `quality`,
 and writes them back to the file, keeping the comments. The other keys are set in the file only.
+A `#` starts a comment only at the beginning of a line or after a blank, so paths may contain `#`.
 
 | Key | Meaning |
 | --- | --- |
-| `obj_file`, `obj_scale`, `obj_rotation` | CubeSat model (empty = marker), units → meters, rotation in degrees X Y Z. Camera frame: x = image right, y = image top, −z = boresight |
+| `obj_file`, `obj_scale`, `obj_rotation` | CubeSat model (empty = marker), units → meters, rotation in degrees X Y Z. Camera frame: x = image right, y = image top, −z = boresight. The SelenITA 16U model (`assets/cubsat`, in cm) uses `0.01` and `0 90 0`: the lens (+X face) points along the boresight, the smallest face (+Y) faces the flight direction and the solar panel face (−Y) the opposite |
 | `start_utc`, `speed` | Start time (empty = first row) and initial time factor |
 | `orbit_fov`, `orbit_gain` | Vertical FOV and fixed gain of the orbit view |
 | `orbit_star_mag` | Faintest star magnitude visible in the orbit view (6.5 ≈ naked eye) |
+| `orbit_sat_scale` | Initial value of the orbit view's Satellite slider: the satellite is drawn at this many times its real size (`1` = real) |
 | `sensor`, `fov` | Camera resolution and horizontal FOV |
 | `tilt`, `azimuth`, `roll` | Off-nadir angle; tilt direction relative to the velocity (0 = forward, 90 = right; the image top follows it); roll (positive turns the image clockwise) |
 | `color` | `natural` (643/566/415 nm) or `gray` (643 nm), in both views |
@@ -110,6 +161,10 @@ All controls are buttons in the bottom bar. There are no keyboard shortcuts.
 | `Settings` | Back to the start screen |
 | `Quit` | Quit |
 | Left drag / wheel on the orbit view | Rotate / zoom (the camera view is not interactive) |
+| `North Pole`, `South Pole` (orbit view) | Mark the pole and the ±80° latitude ring on the visible side of the Moon |
+| `Satellite` slider (orbit view) | Magnification, logarithmic, from `Real` (×1) to ×100 000. The size is fixed in space, so it shrinks on screen as the view moves away. Enlarged, the satellite is drawn over the Moon, except when it is behind it |
+| `Camera FOV` (orbit view) | Shows the camera's field of view: the four corner rays from the satellite to the Moon and the outline of the imaged area on the surface (a ray that misses the Moon stops at the horizon distance) |
+| `Axes` (orbit view) | Show the MOON_ME axes in the top right corner: 0° longitude (toward the Earth), 90°E, north. Axes pointing away from the viewer are dimmed |
 
 The executable asks hybrid-graphics drivers for the dedicated GPU (`NvOptimusEnablement`, `AmdPowerXpressRequestHighPerformance`).
 The GPU in use is shown in the telemetry panel.

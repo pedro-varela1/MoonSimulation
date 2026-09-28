@@ -1,4 +1,5 @@
 #include "orbit.h"
+#include "platform.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -80,7 +81,7 @@ void solve5(double A[5][5], double B[5][3]) {
 
 void Orbit::load(const std::string& path, const glm::dmat3& rot) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) { fprintf(stderr, "orbita: nao foi possivel abrir %s\n", path.c_str()); exit(1); }
+    if (!f) fatal("Could not open the orbit file " + path);
     std::string buf(f.tellg(), '\0');
     f.seekg(0).read(buf.data(), buf.size());
 
@@ -94,7 +95,7 @@ void Orbit::load(const std::string& path, const glm::dmat3& rot) {
         raw.push_back(rot * (r * glm::dvec3(std::cos(la) * std::cos(lo), std::cos(la) * std::sin(lo), std::sin(la))));
     });
     size_t n = t.size();
-    if (n < 5) { fprintf(stderr, "orbita: dados insuficientes em %s\n", path.c_str()); exit(1); }
+    if (n < 5) fatal("The orbit file has too few valid rows: " + path);
 
     double hw = std::max(WINDOW, 6 * (t.back() - t.front()) / (n - 1)) / 2;
     p.resize(n);

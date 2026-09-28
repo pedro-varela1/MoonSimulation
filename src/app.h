@@ -10,6 +10,7 @@
 #include "terrain.h"
 
 constexpr double MOON_R = 1737.4;
+inline const std::array<const char*, 3> QUALITY{"high", "medium", "low"};
 inline const std::array<glm::dvec3, 2> VIEW0{glm::dvec3(0, 0.3, 6000), glm::dvec3(0, 0.3, 1)};  // yaw, pitch, distance: free, follow
 
 struct App {
@@ -20,11 +21,17 @@ struct App {
     std::unique_ptr<Streamer> sldem, polar;
     Renderer renderer;
     GLFWwindow* win = nullptr;
-    bool running = false, paused = false, follow = false;
-    double et0 = 0, t = 0, tStart = 0, speed = 1, fps = 0;
+    bool running = false, paused = false, follow = false, northPole = false, southPole = false, axes = true, fov = false;  // last four: orbit view overlays
+    double et0 = 0, t = 0, tStart = 0, speed = 1, fps = 0, vramGb = 0;
+    float satScale = 1;  // satellite magnification in the orbit view
+    int autoLevel = 2;
     std::array<glm::dvec3, 2> view = VIEW0;
 
     void seek(double time) { t = std::clamp(time, orbit.begin(), orbit.end()); }
+    int level() const {
+        auto it = std::find(QUALITY.begin(), QUALITY.end(), cfg.quality);
+        return it == QUALITY.end() ? autoLevel : int(it - QUALITY.begin());
+    }
 
     // camera frame: x = image right, y = image top, -z = boresight
     glm::dmat3 attitude(const State& s) const {

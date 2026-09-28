@@ -5,15 +5,13 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #include <stb_image.h>
-#define WIN32_LEAN_AND_MEAN
-#define GLFW_EXPOSE_NATIVE_WIN32
-#include <GLFW/glfw3native.h>
-#include <commdlg.h>
 #include <cfloat>
 #include <cstdarg>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include "ephem.h"
+#include "platform.h"
 
 namespace ui {
 namespace {
@@ -22,6 +20,7 @@ namespace {
 constexpr uint32_t BG = 0x070C19, BG2 = 0x0C1630, PANEL = 0x0E162B, FIELD = 0x0A1224, LINE = 0x243457, TEXT = 0xE8ECF5,
                    MUTED = 0x8391B0, GOLD = 0xF2C230, ORANGE = 0xF29A2E, GREEN = 0x2BB673, RED = 0xFF6B6B;
 constexpr std::array<double, 10> SPEEDS{1, 2, 5, 10, 20, 50, 100, 200, 500, 1000};
+constexpr const char* LEVEL[3] = {"High", "Medium", "Low"};
 
 ImVec4 hex(uint32_t c, float a = 1) { return {((c >> 16) & 255) / 255.f, ((c >> 8) & 255) / 255.f, (c & 255) / 255.f, a}; }
 ImU32 u32(uint32_t c, float a = 1) { return ImGui::ColorConvertFloat4ToU32(hex(c, a)); }
@@ -38,7 +37,7 @@ std::string gpu;
 struct Form {
     char file[1024] = "", start[64] = "";
     double orbitFov = 45, fov = 120, tilt = 0, azimuth = 0, roll = 0, span = -1;
-    int color = 0;
+    int color = 0, quality = 0;  // quality: 0 auto, then high, medium, low
     bool earthshine = true, ready = false;
     std::string checked, first;
 } form;
@@ -47,7 +46,7 @@ struct Form {
 Logo loadLogo(const char* path, bool icon = false) {
     int w, h, n;
     unsigned char* px = stbi_load(path, &w, &h, &n, 4);
-    if (!px) { fprintf(stderr, "nao foi possivel abrir %s\n", path); exit(1); }
+    if (!px) fatal(std::string("Could not open the image ") + path);
     Logo l;
     l.aspect = float(w) / h;
     int levels = 1 + int(std::log2(std::max(w, h)));
@@ -206,25 +205,6 @@ void field(const char* label, const std::string& error, const std::function<void
     }
 }
 
-std::string browse(const std::string& current) {
-    wchar_t file[1024] = L"";
-    MultiByteToWideChar(CP_UTF8, 0, current.c_str(), -1, file, 1024);
-    for (wchar_t* c = file; *c; c++) if (*c == L'/') *c = L'\\';
-    OPENFILENAMEW o{};
-    o.lStructSize = sizeof o;
-    o.hwndOwner = glfwGetWin32Window(window);
-    o.lpstrFilter = L"STK report (*.txt)\0*.txt\0All files\0*.*\0";
-    o.lpstrFile = file;
-    o.nMaxFile = 1024;
-    o.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetOpenFileNameW(&o)) return current;
-    char out[4096];
-    WideCharToMultiByte(CP_UTF8, 0, file, -1, out, sizeof out, nullptr, nullptr);
-    std::string s = out;
-    std::replace(s.begin(), s.end(), '\\', '/');
-    return s;
-}
-
 std::string num(double v) {
     char s[32];
     snprintf(s, sizeof s, "%g", v);
@@ -232,6 +212,79 @@ std::string num(double v) {
 }
 
 std::string range(double v, double lo, double hi) { return v >= lo && v <= hi ? "" : "Between " + num(lo) + " and " + num(hi); }
+
+// orbit view overlays: poles with their 80 deg rings, the MOON_ME axes, and the toggles for both
+void overlays(App& a, const Camera& c, glm::ivec4 r, float k) {
+    constexpr uint32_t NORTH = 0x6FB1FF, SOUTH = 0xC49BFF;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 o(float(r.x), float(r.y)), p1(o.x + r.z, o.y + r.w);
+    auto project = [&](glm::dvec3 p, ImVec2& q) {  // false behind the camera or on the far side of the Moon
+        glm::dvec3 d = p - c.eye;
+        double z = glm::dot(d, c.fwd);
+        if (z <= 0 || glm::dot(d, p) > 0) return false;
+        q = {o.x + float((1 + glm::dot(d, c.right) / (z * c.tanX)) / 2) * r.z, o.y + float((1 - glm::dot(d, c.up) / (z * c.tanY)) / 2) * r.w};
+        return true;
+    };
+    dl->PushClipRect(o, p1, true);
+    for (int south = 0; south < 2; south++) {
+        if (!(south ? a.southPole : a.northPole)) continue;
+        double z = south ? -1 : 1, lat = glm::radians(80.0);
+        ImU32 col = u32(south ? SOUTH : NORTH);
+        auto ring = [&](int i) { double l = glm::radians(2.0 * i); return MOON_R * glm::dvec3(std::cos(lat) * std::cos(l), std::cos(lat) * std::sin(l), z * std::sin(lat)); };
+        ImVec2 q0, q1;
+        for (int i = 0; i < 180; i++)
+            if (project(ring(i), q0) && project(ring(i + 1), q1)) dl->AddLine(q0, q1, col, 1.5f * k);
+        if (project({0, 0, z * MOON_R}, q0)) {
+            dl->AddCircleFilled(q0, 3.5f * k, col);
+            dl->AddCircle(q0, 7 * k, col, 0, 1.5f * k);
+            text(dl, bold, 13, {q0.x + 10 * k, q0.y - 9 * k}, south ? SOUTH : NORTH, south ? "SP" : "NP");
+        }
+    }
+
+    // axis triad in the top right corner, seen with the view's rotation; axes pointing away are dimmed and drawn first
+    if (a.axes) {
+        struct Axis { glm::dvec3 e; uint32_t col; const char* name; } axes[3] = {
+            {{1, 0, 0}, 0xFF6B6B, "0°"}, {{0, 1, 0}, 0x5EDB8E, "90°E"}, {{0, 0, 1}, NORTH, "N"}};
+        std::sort(axes, axes + 3, [&](const Axis& p, const Axis& q) { return glm::dot(p.e, c.fwd) > glm::dot(q.e, c.fwd); });
+        float len = 40 * k;
+        ImVec2 ctr(p1.x - len - 30 * k, o.y + len + 30 * k);
+        dl->AddCircleFilled(ctr, len + 22 * k, u32(BG, 0.6f));
+        for (auto& x : axes) {
+            ImVec2 d(float(glm::dot(x.e, c.right)), -float(glm::dot(x.e, c.up))), tip(ctr.x + d.x * len, ctr.y + d.y * len);
+            ImU32 col = u32(x.col, glm::dot(x.e, c.fwd) > 0 ? 0.4f : 1.f);
+            dl->AddLine(ctr, tip, col, 2 * k);
+            float n = std::hypot(d.x, d.y);
+            ImVec2 u = n > 1e-3f ? ImVec2(d.x / n, d.y / n) : ImVec2(0, -1), side(-u.y, u.x);
+            dl->AddTriangleFilled(tip, {tip.x - u.x * 8 * k + side.x * 4 * k, tip.y - u.y * 8 * k + side.y * 4 * k},
+                                  {tip.x - u.x * 8 * k - side.x * 4 * k, tip.y - u.y * 8 * k - side.y * 4 * k}, col);
+            ImVec2 w = measure(bold, 12, x.name);
+            dl->AddText(bold, 12 * S, {tip.x + u.x * 11 * k - w.x / 2, tip.y + u.y * 11 * k - w.y / 2}, col, x.name);
+        }
+        text(dl, regular, 11, {ctr.x, ctr.y + len + 24 * k}, MUTED, "Moon axes (MOON_ME)", 0.5f);
+    }
+    dl->PopClipRect();
+
+    ImGui::PushFont(regular, 13);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {3 * k, 2 * k});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {6 * k, 4 * k});
+    ImVec2 b0(o.x + 12 * k, o.y + 44 * k);
+    float h = 5 * ImGui::GetFrameHeight() + 4 * 4 * k + 12 * k;
+    dl->AddRectFilled(b0, {b0.x + 220 * k, b0.y + h}, u32(BG, 0.75f), 8 * k);
+    ImGui::SetCursorScreenPos({b0.x + 6 * k, b0.y + 6 * k});
+    ImGui::BeginGroup();
+    ImGui::Checkbox("North Pole", &a.northPole);
+    ImGui::Checkbox("South Pole", &a.southPole);
+    ImGui::Checkbox("Axes", &a.axes);
+    ImGui::Checkbox("Camera FOV", &a.fov);
+    ImGui::SetNextItemWidth(130 * k);
+    ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, 6 * k);
+    ImGui::SliderFloat("Satellite", &a.satScale, 1, 100000, a.satScale < 1.5f ? "Real" : "×%.0f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+    ImGui::PopStyleVar();
+    ImGui::SetItemTooltip("Satellite size, in times its real size");
+    ImGui::EndGroup();
+    ImGui::PopStyleVar(2);
+    ImGui::PopFont();
+}
 
 }
 
@@ -244,9 +297,13 @@ void init(GLFWwindow* w) {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
-    regular = io.Fonts->AddFontFromFileTTF("assets/fonts/Inter-Regular.ttf", 16);
-    bold = io.Fonts->AddFontFromFileTTF("assets/fonts/Inter-SemiBold.ttf", 16);
-    mono = io.Fonts->AddFontFromFileTTF("assets/fonts/JetBrainsMono-Regular.ttf", 16);
+    auto font = [&](const char* path) {
+        if (!std::filesystem::exists(path)) fatal(std::string("Could not open the font ") + path);
+        return io.Fonts->AddFontFromFileTTF(path, 16);
+    };
+    regular = font("assets/fonts/Inter-Regular.ttf");
+    bold = font("assets/fonts/Inter-SemiBold.ttf");
+    mono = font("assets/fonts/JetBrainsMono-Regular.ttf");
     io.FontDefault = regular;
     ImGui::GetStyle().FontSizeBase = 16;
     ImGui::GetStyle().FontScaleDpi = S;
@@ -294,6 +351,7 @@ bool intro(App& a) {
         snprintf(form.start, sizeof form.start, "%s", c.startUtc.c_str());
         form.orbitFov = c.orbitFov, form.fov = c.fov, form.tilt = c.tilt, form.azimuth = c.azimuth, form.roll = c.roll;
         form.color = c.gray, form.earthshine = c.earthshine, form.ready = true;
+        form.quality = int(std::find(QUALITY.begin(), QUALITY.end(), c.quality) - QUALITY.begin() + 1) % 4;
         form.checked = "\1";
     }
     if (form.checked != form.file) {
@@ -329,7 +387,7 @@ bool intro(App& a) {
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 110 * S);
         ImGui::InputText("##file", form.file, sizeof form.file);
         ImGui::SameLine();
-        if (ImGui::Button("Browse…", {-1, 0})) snprintf(form.file, sizeof form.file, "%s", browse(form.file).c_str());
+        if (ImGui::Button("Browse…", {-1, 0})) snprintf(form.file, sizeof form.file, "%s", openFileDialog(window, form.file).c_str());
     });
     field("Start (UTC)", errStart, [&] { ImGui::InputText("##start", form.start, sizeof form.start); }, hint.c_str());
     ImGui::Spacing();
@@ -343,6 +401,13 @@ bool intro(App& a) {
     field("Roll", errRoll, [&] { ImGui::InputDouble("##roll", &form.roll, 5, 45, "%.1f°"); });
     field("Color", "", [&] { ImGui::Combo("##color", &form.color, "Natural (643/566/415 nm)\0Gray (643 nm)\0"); });
     field("Earthshine", "", [&] { ImGui::Checkbox("Earth light on the night side", &form.earthshine); });
+    ImGui::Spacing();
+    section("PERFORMANCE");
+    std::string autoItem = std::string("Auto: ") + LEVEL[a.autoLevel], gpuHint = "Detected " + gpu;
+    gpuHint += a.vramGb > 0 ? ", " + num(std::round(a.vramGb * 10) / 10) + " GB of video memory" : ", integrated or unknown video memory";
+    const char* items[4] = {autoItem.c_str(), "High (full resolution, ~3.6 GB)", "Medium (global maps at half resolution, ~1.6 GB)",
+                            "Low (as Medium, orbit view at half resolution, ~1.4 GB)"};
+    field("Quality", "", [&] { ImGui::Combo("##quality", &form.quality, items, 4); }, gpuHint.c_str());
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
@@ -363,9 +428,10 @@ bool intro(App& a) {
     if (!start) return false;
     c.orbitFile = form.file, c.startUtc = form.start, c.orbitFov = form.orbitFov, c.fov = form.fov, c.tilt = form.tilt;
     c.azimuth = form.azimuth, c.roll = form.roll, c.gray = form.color == 1, c.earthshine = form.earthshine;
+    c.quality = form.quality ? QUALITY[form.quality - 1] : "auto";
     saveConfig(a.cfgPath.c_str(), {{"orbit_file", c.orbitFile}, {"start_utc", c.startUtc}, {"orbit_fov", num(c.orbitFov)}, {"fov", num(c.fov)},
                                    {"tilt", num(c.tilt)}, {"azimuth", num(c.azimuth)}, {"roll", num(c.roll)},
-                                   {"color", c.gray ? "gray" : "natural"}, {"earthshine", c.earthshine ? "1" : "0"}});
+                                   {"color", c.gray ? "gray" : "natural"}, {"earthshine", c.earthshine ? "1" : "0"}, {"quality", c.quality}});
     form.ready = false;
     return true;
 }
@@ -433,6 +499,7 @@ void run(App& a, const Scene& s, const Layout& L) {
     panel(L.orbit, a.renderer.orbitImage(), "ORBIT", a.follow ? "following the satellite" : "free view");
     text(dl, regular, 13, {L.orbit.x + 14 * k, L.orbit.y + L.orbit.w - 26 * k}, MUTED, "Drag to rotate  ·  scroll to zoom");
     ImGui::SetCursorScreenPos({float(L.orbit.x), float(L.orbit.y)});
+    ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("orbit", {float(L.orbit.z), float(L.orbit.w)});
     glm::dvec3& v = a.view[a.follow];
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
@@ -441,6 +508,7 @@ void run(App& a, const Scene& s, const Layout& L) {
     }
     if (ImGui::IsItemHovered() && io.MouseWheel != 0)
         v.z = std::clamp(v.z * std::pow(1.15, -io.MouseWheel), a.follow ? 0.002 : MOON_R + 12, a.follow ? 20000.0 : 1e6);
+    overlays(a, s.view, L.orbit, k);
 
     // camera image (view only)
     double fovV = glm::degrees(2 * std::atan(s.cam.tanY));
@@ -487,8 +555,9 @@ void run(App& a, const Scene& s, const Layout& L) {
         ImGui::Spacing();
         section("SYSTEM");
         row("Frame rate", "%.0f fps", a.fps);
-        row("SLDEM", "%d / %d", a.sldem->resident, a.sldem->pending);
-        row("Polar DEM", "%d / %d", a.polar->resident, a.polar->pending);
+        row("Quality", "%s", LEVEL[a.terrain.level]);
+        for (auto [name, s] : {std::pair{"SLDEM", a.sldem.get()}, std::pair{"Polar DEM", a.polar.get()}})
+            s->present ? row(name, "%d / %d", s->resident, s->pending) : row(name, "not installed");
         ImGui::TextColored(hex(MUTED), "%s", gpu.c_str());
         ImGui::EndTable();
     }

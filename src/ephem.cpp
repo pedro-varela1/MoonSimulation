@@ -1,4 +1,5 @@
 #include "ephem.h"
+#include "platform.h"
 #include <SpiceUsr.h>
 #include <algorithm>
 #include <cctype>
@@ -8,6 +9,8 @@
 #include <filesystem>
 #include <string_view>
 #include <glm/gtc/type_ptr.hpp>
+
+extern "C" int zzekscln_();  // CSPICE: EK scratch area clean up
 
 namespace ephem {
 
@@ -35,7 +38,17 @@ double teff(const char* sp) {
 }
 
 void init(const std::string& dir) {
+    if (!std::filesystem::is_directory(dir)) fatal("The SPICE kernel folder was not found: " + dir);
+    char ret[] = "RETURN", abort[] = "ABORT", none[] = "NONE", all[] = "DEFAULT", msg[1841];
+    erract_c("SET", 0, ret);
+    errprt_c("SET", 0, none);
     for (auto& f : std::filesystem::directory_iterator(dir)) furnsh_c(f.path().string().c_str());
+    if (failed_c()) {
+        getmsg_c("LONG", sizeof msg, msg);
+        fatal("Could not load the SPICE kernels in " + dir + ":\n" + msg);
+    }
+    erract_c("SET", 0, abort);
+    errprt_c("SET", 0, all);
 }
 
 double et(const std::string& utc) {
@@ -72,12 +85,13 @@ glm::dmat3 rotation(const char* from, const char* to, double et) {
 
 // SPICE type 1 star catalog (EK), proper motion applied up to et
 std::vector<Source> stars(const std::string& catalog, double et) {
+    if (!std::filesystem::exists(catalog)) fatal("The star catalog was not found: " + catalog);
     furnsh_c(catalog.c_str());
     SpiceInt n;
     SpiceBoolean bad, null, found;
     char msg[1024];
     ekfind_c("SELECT RA, DEC, RA_PM, DEC_PM, RA_EPOCH, DEC_EPOCH, VISUAL_MAGNITUDE, SPECTRAL_TYPE FROM HIPPARCOS", sizeof msg, &n, &bad, msg);
-    if (bad) { fprintf(stderr, "estrelas: %s\n", msg); exit(1); }
+    if (bad) fatal("Could not read the star catalog " + catalog + ":\n" + msg);
     double years = et / (86400 * 365.25) + 50;
     std::vector<Source> out(n);
     for (int r = 0; r < n; r++) {
@@ -89,6 +103,7 @@ std::vector<Source> stars(const std::string& catalog, double et) {
         out[r] = {glm::dvec4(std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec), 0), v[6], teff(sp)};
     }
     unload_c(catalog.c_str());
+    zzekscln_();  // delete the query's scratch file (tmp.Fa*), which would otherwise stay in the working directory
     return out;
 }
 

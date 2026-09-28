@@ -1,0 +1,5 @@
+# Orbit files (STK reports) packed into data/orbits, one path per line.
+# The orbit_file of config.ini is always packed and stays the default on the start screen.
+C:/Users/pedropafvl/Downloads/REPORT 26-02-2026 - COORDINATES MOON REFERENCE SCENARIO/SelenITA_CoordinatesMoon_Commissioning.txt
+C:/Users/pedropafvl/Downloads/REPORT 26-02-2026 - COORDINATES MOON REFERENCE SCENARIO/SelenITA_CoordinatesMoon_Operational_70km.txt
+C:/Users/pedropafvl/Downloads/SelenITA_CoordinatesMoon_Operational_30km.txt

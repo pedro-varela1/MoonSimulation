@@ -1,6 +1,8 @@
 #include <cstdio>
+#include <filesystem>
 #include "app.h"
 #include "ephem.h"
+#include "platform.h"
 #include "ui.h"
 
 // ask hybrid-graphics drivers for the dedicated GPU
@@ -12,7 +14,7 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 namespace {
 
 constexpr double POLAR_Z = 0.857167;  // sin 59°: SLDEM below, polar DEM above
-constexpr int INTRO_W = 1120, INTRO_H = 800;
+constexpr int INTRO_W = 1120, INTRO_H = 880;
 
 GLFWmonitor* monitorOf(GLFWwindow* w) {
     int wx, wy, ww, wh, n;
@@ -49,7 +51,7 @@ void fullscreen(GLFWwindow* w) {
     glfwSetWindowMonitor(w, nullptr, mx, my, v->width, v->height, 0);
 }
 
-// the orbit is reloaded only when its file changed; terrain, sky and renderer are loaded once
+// the orbit is reloaded only when its file changed, the global maps when the quality changed; streaming and sky once
 void load(App& a) {
     double shown = -1;
     auto progress = [&](const char* stage, float done) {
@@ -68,13 +70,19 @@ void load(App& a) {
     }
     a.et0 = ephem::et(a.orbit.utc0);
     a.tStart = a.t = std::clamp(ephem::et(a.cfg.startUtc) - a.et0, a.orbit.begin(), a.orbit.end());
-    if (!a.sldem) {
-        a.terrain.load(a.cfg, [&](const char* stage, float f) { progress(stage, 0.03f + 0.92f * f); });
+    int level = a.level();
+    if (a.terrain.level != level) {
+        a.terrain.load(a.cfg, level, [&](const char* stage, float f) { progress(stage, 0.03f + 0.92f * f); });
         progress("Stars, polar caps and terrain streaming", 0.96f);
-        a.sldem = std::make_unique<Sldem>(a.cfg.sldemDir);
-        a.polar = std::make_unique<PolarDem>(a.cfg.polarDir);
-        a.renderer.init(a.cfg, a.terrain, *a.sldem, *a.polar,
-                        a.cfg.starCatalog.empty() ? std::vector<ephem::Source>() : ephem::stars(a.cfg.starCatalog, a.et0 + a.tStart));
+        if (!a.sldem) {
+            a.sldem = std::make_unique<Sldem>(a.cfg.sldemDir);
+            a.polar = std::make_unique<PolarDem>(a.cfg.polarDir);
+            a.renderer.init(a.cfg, a.terrain, *a.sldem, *a.polar,
+                            a.cfg.starCatalog.empty() ? std::vector<ephem::Source>() : ephem::stars(a.cfg.starCatalog, a.et0 + a.tStart));
+        } else a.renderer.buildCaps();
+        for (GLenum e; (e = glGetError()) != GL_NO_ERROR;)
+            if (e == GL_OUT_OF_MEMORY)
+                fatal(std::string("There is not enough video memory for the ") + QUALITY[level] + " quality.\n\nStart the simulator again and choose a lower quality on the start screen.");
     }
     progress("Ready", 1);
 }
@@ -84,29 +92,35 @@ void load(App& a) {
 int main(int argc, char** argv) {
     auto app = std::make_unique<App>();
     App& a = *app;
-    a.cfgPath = argc > 1 ? argv[1] : "config.ini";
+    a.cfgPath = argc > 1 ? std::filesystem::absolute(argv[1]).string() : "config.ini";
+    useExeDir();
     a.cfg = loadConfig(a.cfgPath.c_str());
     a.speed = a.cfg.speed;
+    a.satScale = float(std::max(a.cfg.orbitSatScale, 1.0));
     ephem::init(a.cfg.spiceDir);
 
-    if (!glfwInit()) return 1;
+    const char* noGl = "SelenITA Lunar Orbit Simulator needs a graphics card with OpenGL 4.6, and none was found on this computer.\n\n"
+                       "Install or update the driver of the NVIDIA, AMD or Intel graphics card. Virtual machines, remote desktop sessions "
+                       "and the basic Microsoft display driver do not provide OpenGL 4.6.";
+    if (!glfwInit()) fatal(noGl);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_DEPTH_BITS, 0);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     a.win = glfwCreateWindow(INTRO_W, INTRO_H, "SelenITA — Lunar Orbit Simulator", nullptr, nullptr);
-    if (!a.win) { fprintf(stderr, "nao foi possivel criar a janela OpenGL 4.6\n"); return 1; }
+    if (!a.win) fatal(noGl);
     windowed(a.win);
     glfwMakeContextCurrent(a.win);
     glewExperimental = GL_TRUE;
-    if (glewInit() != GLEW_OK) return 1;
+    if (glewInit() != GLEW_OK) fatal(noGl);
     glGetError();
     glEnable(GL_DEBUG_OUTPUT);
     glDebugMessageCallback([](GLenum, GLenum type, GLuint, GLenum sev, GLsizei, const GLchar* msg, const void*) {
         if (type == GL_DEBUG_TYPE_ERROR || sev == GL_DEBUG_SEVERITY_HIGH) fprintf(stderr, "GL: %s\n", msg);
     }, nullptr);
     glfwSwapInterval(1);
+    a.autoLevel = detectQuality(a.vramGb);
     ui::init(a.win);
 
     double last = glfwGetTime(), fpsAt = last;
@@ -132,7 +146,7 @@ int main(int argc, char** argv) {
         glfwGetFramebufferSize(a.win, &size.x, &size.y);
         if (size.x == 0 || size.y == 0) continue;
         ui::Layout L = ui::layout(size);
-        glm::ivec2 orbitSize(L.orbit.z, L.orbit.w);
+        glm::ivec2 orbitSize = glm::max(glm::ivec2(L.orbit.z, L.orbit.w) / (a.terrain.level > 1 ? 2 : 1), glm::ivec2(1));  // low quality: half resolution
 
         State st = a.orbit.at(a.t);
         Scene s;
@@ -147,6 +161,8 @@ int main(int argc, char** argv) {
         s.earthToMe = ephem::rotation("IAU_EARTH", "MOON_ME", et);
         s.planets = ephem::planets(et);
         s.dt = dt;
+        s.satScale = a.satScale;
+        s.showFov = a.fov;
         for (int i = 0; i <= 1024; i++) s.track.push_back(a.orbit.at(std::clamp(a.t + (i / 1024.0 - 0.5) * a.orbit.period, a.orbit.begin(), a.orbit.end())).p);
         s.now = 512;
 

@@ -15,13 +15,15 @@
 
 struct Terrain {
     GLuint lola = 0, albedo = 0, hapke = 0, earth = 0;
-    void load(const Config& c, const std::function<void(const char* stage, float done)>& progress);
+    int level = -1;  // quality loaded: 0 high (full resolution), 1 medium, 2 low (global maps at half resolution)
+    void load(const Config& c, int quality, const std::function<void(const char* stage, float done)>& progress);
 };
 
 class Streamer {
 public:
     GLuint tex = 0, cover = 0;
     int resident = 0, pending = 0;
+    bool present = false;  // source files installed
     virtual ~Streamer() = default;
     void update(const glm::dvec3& center, const std::vector<glm::dvec3>& path, double needKm, bool active, double dt);
     glm::vec4 window() const { return {float(x0), float(y0), active ? 1.f : 0.f, float(tag)}; }
@@ -31,7 +33,7 @@ protected:
     const int NX, NY, WX, WY;
     const bool wrap;
     Streamer(int nx, int ny, int wx, int wy, bool wrap);
-    void start();
+    void start(const std::string& probe);
     void stop();
     uint32_t id(int tag, int tx, int ty) const { return uint32_t((tag * NY + ty) * NX + tx); }
     virtual bool place(const glm::dvec3& c, int& x, int& y, int& tag) const = 0;
