@@ -161,9 +161,9 @@ All controls are buttons in the bottom bar. There are no keyboard shortcuts.
 | `Settings` | Back to the start screen |
 | `Quit` | Quit |
 | Left drag / wheel on the orbit view | Rotate / zoom (the camera view is not interactive) |
-| `North Pole`, `South Pole` (orbit view) | Mark the pole and the ±80° latitude ring on the visible side of the Moon |
+| `North Pole`, `South Pole` (orbit view) | Mark the pole and the ±60° latitude ring on the visible side of the Moon |
 | `Satellite` slider (orbit view) | Magnification, logarithmic, from `Real` (×1) to ×100 000. The size is fixed in space, so it shrinks on screen as the view moves away. Enlarged, the satellite is drawn over the Moon, except when it is behind it |
-| `Camera FOV` (orbit view) | Shows the camera's field of view: the four corner rays from the satellite to the Moon and the outline of the imaged area on the surface (a ray that misses the Moon stops at the horizon distance) |
+| `Camera FOV` (orbit view) | Shows the camera's field of view in translucent yellow: the sides of the view pyramid from the satellite to the Moon and the imaged area on the surface (a ray that misses the Moon stops at the horizon distance) |
 | `Axes` (orbit view) | Show the MOON_ME axes in the top right corner: 0° longitude (toward the Earth), 90°E, north. Axes pointing away from the viewer are dimmed |
 
 The executable asks hybrid-graphics drivers for the dedicated GPU (`NvOptimusEnablement`, `AmdPowerXpressRequestHighPerformance`).

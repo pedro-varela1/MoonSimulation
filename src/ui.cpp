@@ -213,7 +213,7 @@ std::string num(double v) {
 
 std::string range(double v, double lo, double hi) { return v >= lo && v <= hi ? "" : "Between " + num(lo) + " and " + num(hi); }
 
-// orbit view overlays: poles with their 80 deg rings, the MOON_ME axes, and the toggles for both
+// orbit view overlays: poles with their 60 deg rings, the MOON_ME axes, and the toggles for both
 void overlays(App& a, const Camera& c, glm::ivec4 r, float k) {
     constexpr uint32_t NORTH = 0x6FB1FF, SOUTH = 0xC49BFF;
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -228,7 +228,7 @@ void overlays(App& a, const Camera& c, glm::ivec4 r, float k) {
     dl->PushClipRect(o, p1, true);
     for (int south = 0; south < 2; south++) {
         if (!(south ? a.southPole : a.northPole)) continue;
-        double z = south ? -1 : 1, lat = glm::radians(80.0);
+        double z = south ? -1 : 1, lat = glm::radians(60.0);
         ImU32 col = u32(south ? SOUTH : NORTH);
         auto ring = [&](int i) { double l = glm::radians(2.0 * i); return MOON_R * glm::dvec3(std::cos(lat) * std::cos(l), std::cos(lat) * std::sin(l), z * std::sin(lat)); };
         ImVec2 q0, q1;

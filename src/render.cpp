@@ -13,6 +13,7 @@ struct FrameUBO { glm::vec4 sunDir, earthDir, light, sldemWin, polarWin; glm::ma
 struct ViewUBO { glm::vec4 eye, right, up, fwd, size; };
 constexpr double PI = 3.14159265358979, AU = 149597870.7, RSUN = 695700, REARTH = 6371, RMOON = 1737.4, ZNEAR = 1e-5, VSUN = -26.74, TSUN = 5772;
 constexpr double STAR_PEAK = 0.009;  // orbit window: linear display value of a star at orbit_star_mag (sRGB ~24/255)
+constexpr int FOV_N = 16;  // orbit window: camera field of view grid, cells per image side
 
 std::string readFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
@@ -91,7 +92,7 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     probeMap = static_cast<const float*>(glMapNamedBufferRange(probeBuf, 0, sizeof probe0, map));
     expMap = static_cast<const float*>(glMapNamedBufferRange(expBuf, 0, sizeof exp0, map));
     trackBuf = buffer(sizeof(glm::vec4) * 1025, nullptr, GL_DYNAMIC_STORAGE_BIT);
-    fovBuf = buffer(sizeof(glm::vec4) * 73, nullptr, GL_DYNAMIC_STORAGE_BIT);
+    fovBuf = buffer(sizeof(glm::vec4) * (4 * FOV_N + 2 + 6 * FOV_N * FOV_N), nullptr, GL_DYNAMIC_STORAGE_BIT);
     std::vector<glm::vec4> pts;
     for (auto& src : catalog) pts.insert(pts.end(), {glm::vec4(src.p), flux(src)});
     stars = int(catalog.size());
@@ -274,7 +275,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glUniform1i(2, 0);
     glDrawArrays(GL_LINE_STRIP, 0, GLsizei(pts.size()));
     if (s.showFov) {
-        // camera field of view: the four corner rays down to the Moon and the footprint outline (a ray missing the Moon stops at the horizon distance)
+        // camera field of view, translucent: the sides of the view pyramid (a fan from the satellite) and the imaged area; a ray missing the Moon stops at the horizon distance
         const Camera& c = s.cam;
         auto ground = [&](double x, double y) {
             glm::dvec3 d = glm::normalize(c.fwd + x * c.tanX * c.right + y * c.tanY * c.up);
@@ -282,16 +283,23 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
             return glm::vec4(glm::vec3(c.eye + (disc > 0 && t > 0 ? t : std::sqrt(glm::dot(c.eye, c.eye) - RMOON * RMOON)) * d - v.eye), 1);
         };
         const double cx[5] = {-1, 1, 1, -1, -1}, cy[5] = {1, 1, -1, -1, 1};
-        std::vector<glm::vec4> fov;
-        for (int k = 0; k < 4; k++) fov.insert(fov.end(), {glm::vec4(glm::vec3(c.eye - v.eye), 1), ground(cx[k], cy[k])});
+        std::vector<glm::vec4> fov{glm::vec4(glm::vec3(c.eye - v.eye), 1)};
         for (int k = 0; k < 4; k++)
-            for (int i = 0; i < 16; i++) fov.push_back(ground(glm::mix(cx[k], cx[k + 1], i / 16.0), glm::mix(cy[k], cy[k + 1], i / 16.0)));
+            for (int i = 0; i < FOV_N; i++) fov.push_back(ground(glm::mix(cx[k], cx[k + 1], double(i) / FOV_N), glm::mix(cy[k], cy[k + 1], double(i) / FOV_N)));
         fov.push_back(fov[1]);
+        for (int j = 0; j < FOV_N; j++)
+            for (int i = 0; i < FOV_N; i++)
+                for (int q : {0, 1, 3, 0, 3, 2}) fov.push_back(ground(2.0 * (i + q % 2) / FOV_N - 1, 2.0 * (j + q / 2) / FOV_N - 1));
         glNamedBufferSubData(fovBuf, 0, fov.size() * sizeof(glm::vec4), fov.data());
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, fovBuf);
         glUniform1i(2, 3);
-        glDrawArrays(GL_LINES, 0, 8);
-        glDrawArrays(GL_LINE_STRIP, 8, 65);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4 * FOV_N + 2);
+        glDrawArrays(GL_TRIANGLES, 4 * FOV_N + 2, 6 * FOV_N * FOV_N);
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
     }
     // the satellite at satScale times its size; enlarged, it is drawn over the Moon unless it is behind it
     double dist = glm::length(s.sat - v.eye), b = glm::dot(v.eye, s.sat - v.eye) / dist, disc = b * b - glm::dot(v.eye, v.eye) + RMOON * RMOON;

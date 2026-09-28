@@ -18,7 +18,7 @@ void main() {
     }
     if (mode == 3) {  // pulled toward the eye along the view ray: same pixel, but the terrain relief does not hide it
         vec3 p = v[gl_VertexID].xyz;
-        col = vec3(0.95, 0.76, 0.19);
+        col = vec3(1.0, 0.86, 0.2);
         gl_Position = viewProj * vec4(p - normalize(p) * min(HMAX + 1.0, 0.5 * length(p)), 1.0);
         return;
     }
