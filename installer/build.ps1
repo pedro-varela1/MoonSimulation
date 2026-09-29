@@ -8,6 +8,7 @@ param(
     [switch]$Compact
 )
 $ErrorActionPreference = 'Stop'
+if (Get-Process MoonSimulation -ErrorAction SilentlyContinue) { throw 'Close the simulator first: it keeps the executable and the SPICE kernels open' }
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $env:PATH = "$Msys\ucrt64\bin;$env:PATH"
@@ -74,9 +75,118 @@ $lines = [IO.File]::ReadAllLines("$root\config.ini", [Text.Encoding]::UTF8) | Fo
 if (-not ($lines -match '^\s*quality\s*=')) { $lines += 'quality       = auto' }
 [IO.File]::WriteAllText("$stage\config.ini", ($lines -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
 
+# README.txt and the MIT license, installed with the program and copied next to the installer
+function Save($path, $text) { [IO.File]::WriteAllText($path, ($text.Trim() -replace "`r?`n", "`r`n") + "`r`n", (New-Object Text.UTF8Encoding $true)) }
+$version = [regex]::Match((Get-Content "$PSScriptRoot\selenita.iss" -Raw), '#define AppVersion "(.+?)"').Groups[1].Value
+$setup = "SelenITA-Setup-$version" + $(if ($Compact) { '-Compact' } else { '' })
+$ita = "Instituto Tecnol$([char]0xF3)gico de Aeron$([char]0xE1)utica (ITA)"
+if ($Compact) {
+    $variant = 'compact installer'
+    $about = @'
+This is the compact installer (about 5.5 GB installed). It leaves out the high-resolution terrain (SLDEM2015 and LOLA
+polar, about 38 GB): the camera view uses the global LOLA terrain (about 470 m per pixel), and the telemetry lists the
+high-resolution terrain as not installed. Running the full installer later over this installation adds it.
+'@
+    $disk = 'about 5.5 GB'
+    $pages = 'choose the folder and whether to create a desktop shortcut'
+} else {
+    $variant = 'full installer'
+    $about = @'
+This is the full installer. Its Full installation (about 44 GB) includes the high-resolution terrain of the camera view:
+SLDEM2015 512 ppd (about 59 m per pixel) up to 60 degrees of latitude and LOLA 60 m above. The Compact installation
+(about 5.5 GB) leaves it out and uses the global LOLA terrain (about 470 m per pixel); Custom picks the parts.
+'@
+    $disk = 'about 44 GB for the Full installation, about 5.5 GB for the Compact one'
+    $pages = 'choose the folder, the installation type (Full, Compact or Custom) and whether to create a desktop shortcut'
+}
+Save "$stage\README.txt" @"
+SelenITA Lunar Orbit Simulator $version - $variant
+==================================================
+
+Real-time simulator of the SelenITA CubeSat in lunar orbit. The orbit view shows the Moon lit by the real Sun, the
+satellite and its track; the camera view shows what the CubeSat camera sees, with the real terrain, color, shadows and
+earthshine.
+
+$about
+
+REQUIREMENTS
+- Windows 10 or 11, 64-bit.
+- A graphics card with OpenGL 4.6 and an up-to-date driver (NVIDIA, AMD or Intel). Virtual machines, remote desktop
+  sessions and the basic Microsoft display driver do not provide it.
+- Free disk space: $disk.
+- Nothing else: the installer carries every library and data file the simulator needs.
+
+INSTALL
+1. Keep $setup.exe and all the $setup-*.bin files in the same folder. To take them to another
+   computer, copy (or zip) the whole folder.
+2. Run $setup.exe. No administrator rights are needed: it installs for the current Windows user, by
+   default in %LOCALAPPDATA%\Programs\SelenITA.
+3. Accept the MIT license, $pages.
+4. Launch the simulator at the end, or later from the Start menu (SelenITA Lunar Orbit Simulator) or the desktop shortcut.
+
+RUN
+1. Start screen: choose the orbit and the simulation settings.
+   - $($orbits.Count) SelenITA orbit files come in data\orbits; Browse... opens any other STK report.
+   - The start time must be inside the file's time range.
+   - Set the orbit view FOV, the camera FOV, tilt, azimuth and roll, the color mode, earthshine and the quality
+     (Auto chooses it from the video memory).
+   - START SIMULATION is enabled once every field is valid.
+2. After loading (up to about a minute the first time), the simulation fills the screen:
+   - Orbit view (left): drag to rotate, scroll to zoom. Its boxes mark the poles, show the Moon axes and the camera
+     field of view; the Satellite slider enlarges the satellite.
+   - Camera view (right), with the telemetry below it.
+   - Bottom bar: timeline, time jumps, pause, speed, follow the satellite, reset the view, Settings (back to the start
+     screen) and Quit.
+3. The start screen values are saved in config.ini, in the installation folder. The other settings (camera sensor,
+   satellite model, orbit view gain) are edited in that file.
+
+ORBIT FILES
+STK reports with the columns Time (UTCG), LatitudeMoon (deg), LongitudeMoon (deg) and AltitudeMoon (km) after the line
+of dashes, at any time step. Latitude and longitude are read as MOON_PA.
+
+IF IT DOES NOT START
+- "needs a graphics card with OpenGL 4.6": update the graphics driver. On laptops with two graphics cards, make sure
+  Windows runs the simulator on the dedicated one.
+- "not enough video memory": choose a lower Quality on the start screen.
+
+UNINSTALL
+Windows Settings > Apps > Installed apps > SelenITA Lunar Orbit Simulator > Uninstall.
+
+LICENSE
+The simulator is released under the MIT License (LICENSE.txt). The bundled libraries keep their own licenses (licenses
+folder). Data: NASA LRO LOLA, SLDEM2015 and LROC WAC products, NASA Blue Marble, NAIF SPICE kernels and the Hipparcos
+catalog.
+"@
+Save "$stage\LICENSE.txt" @"
+MIT License
+
+Copyright (c) 2026 SelenITA team, $ita
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The bundled third-party libraries keep their own licenses, in the licenses folder.
+"@
+
 $defines = @("/DStage=$stage", "/DOutputDir=$output", "/DSpiceDir=$(Source spice_dir)", "/DStarCatalog=$(Source star_catalog)",
     "/DEarthTexture=$(Source earth_texture)", "/DLolaDem=$(Source lola_dem)", "/DKitColor=$(Source kit_color)", "/DHapkeDir=$(Source hapke_dir)",
     "/DWac643=$(Source wac_643)", "/DWac566=$(Source wac_566)", "/DWac415=$(Source wac_415)")
 $defines += if ($Compact) { '/DCompact' } else { "/DSldemDir=$(Source sldem_dir)", "/DPolarDir=$(Source polar_dir)" }
 & $Iscc @defines "$PSScriptRoot\selenita.iss"
 if ($LASTEXITCODE) { throw 'installer compilation failed' }
+Copy-Item "$stage\README.txt", "$stage\LICENSE.txt" $output

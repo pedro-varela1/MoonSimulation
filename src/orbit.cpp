@@ -11,6 +11,7 @@
 namespace {
 
 constexpr double R = 1737.4, WINDOW = 61;
+constexpr size_t SIDE = 4;  // fewest samples on each side of a fit window
 
 long long daysFromCivil(int y, int m, int d) {
     y -= m <= 2;
@@ -97,14 +98,16 @@ void Orbit::load(const std::string& path, const glm::dmat3& rot) {
     size_t n = t.size();
     if (n < 5) fatal("The orbit file has too few valid rows: " + path);
 
-    double hw = std::max(WINDOW, 6 * (t.back() - t.front()) / (n - 1)) / 2;
     p.resize(n);
     v.resize(n);
     auto fit = [&](size_t a, size_t b) {
         for (size_t i = a; i < b; i++) {
-            size_t lo = std::lower_bound(t.begin(), t.end(), t[i] - hw) - t.begin();
-            size_t hi = std::upper_bound(t.begin(), t.end(), t[i] + hw) - t.begin();
-            double A[5][5] = {}, B[5][3] = {};
+            // ±WINDOW/2, widened to SIDE samples on each side (2·SIDE+1 at the ends of the file) so sparse, irregular reports stay well posed
+            size_t lo = std::lower_bound(t.begin(), t.end(), t[i] - WINDOW / 2) - t.begin();
+            size_t hi = std::upper_bound(t.begin(), t.end(), t[i] + WINDOW / 2) - t.begin();
+            lo = std::min(lo, i - std::min(i, SIDE)), hi = std::max(hi, std::min(n, i + SIDE + 1));
+            lo = std::min(lo, hi - std::min(hi, 2 * SIDE + 1)), hi = std::max(hi, std::min(n, lo + 2 * SIDE + 1));
+            double hw = std::max(t[i] - t[lo], t[hi - 1] - t[i]), A[5][5] = {}, B[5][3] = {};
             for (size_t j = lo; j < hi; j++) {
                 double x = (t[j] - t[i]) / hw, phi[5] = {1, x, x * x, x * x * x, x * x * x * x};
                 for (int r = 0; r < 5; r++) {

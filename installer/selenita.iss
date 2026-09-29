@@ -27,6 +27,7 @@ MinVersion=10.0
 OutputDir={#OutputDir}
 OutputBaseFilename=SelenITA-Setup-{#AppVersion}{#Variant}
 SetupIconFile=selenita.ico
+LicenseFile={#Stage}\LICENSE.txt
 UninstallDisplayIcon={app}\{#Exe}
 UninstallDisplayName={#AppName}
 WizardStyle=modern

@@ -115,12 +115,16 @@ Both variants install the same application. The compact one goes to `D:\LINNA\in
 2. Stages it in `D:\LINNA\installer\stage` with:
    - the MSYS2 DLLs it loads (found with `ldd`) and their licenses;
    - the shaders, fonts and logos;
-   - a `config.ini` with relative `data/...` paths and `quality = auto`.
+   - a `config.ini` with relative `data/...` paths and `quality = auto`;
+   - a `README.txt` for end users (requirements, install, run), written for the variant being built;
+   - a `LICENSE.txt` with the MIT License (Copyright (c) 2026 SelenITA team, ITA).
 3. Runs Inno Setup on `installer/selenita.iss`.
+4. Copies `README.txt` and `LICENSE.txt` next to the setup `.exe`.
 
 The installer takes only the files the simulator reads, straight from the paths in `config.ini`: the eight WAC `.IMG` tiles per band, the 32 SLDEM float TIFFs, the two polar `.img`, the SPICE kernels, `hipparcos.bdb`, the three Hapke maps, the kit maps and the Earth texture. The orbit files are the configured `orbit_file` plus those listed in `installer/orbits.txt`, all in `data/orbits`. The CubeSat model (`obj_file` and its `.mtl`) goes to `data/model`.
 
 The output is `D:\LINNA\installer\output\SelenITA-Setup-1.0.0.exe` plus 2 GB `.bin` slices, which must stay next to the `.exe`. The installer:
+- shows the MIT License, which must be accepted to continue;
 - installs per user, with no administrator rights, into a folder of the user's choice;
 - offers Full (~43 GB) or Compact (~5 GB, without SLDEM and the polar DEM);
 - adds a Start menu entry and an optional desktop shortcut, and registers an uninstaller;
@@ -173,7 +177,7 @@ The GPU in use is shown in the telemetry panel.
 
 - **Orbit**
   - Latitude and longitude are read as MOON_PA and rotated to MOON_ME with `pxform`.
-  - A local 4th-order least-squares fit (61 s window) removes the 0.001° quantization.
+  - A local 4th-order least-squares fit (61 s window, widened to at least 4 samples on each side for sparse or irregular reports) removes the 0.001° quantization.
   - Cubic Hermite interpolation gives smooth position and velocity.
 - **Sun and Earth**: `spkpos(…, "MOON_ME", "LT", "MOON")` every frame.
 - **Terrain**
