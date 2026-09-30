@@ -130,6 +130,13 @@ The output is `D:\LINNA\installer\output\SelenITA-Setup-1.0.0.exe` plus 2 GB `.b
 - adds a Start menu entry and an optional desktop shortcut, and registers an uninstaller;
 - on reinstall, keeps the user's `config.ini`.
 
+The compact `SelenITA-Setup-1.0.0-Compact.exe` also works on its own. On the Ready page it asks the server for the slices `SelenITA-Setup-1.0.0-Compact-N.bin`. The public share is https://cloud.cei.ita.br/s/6ac9HTioaAAMKxS, reached through its WebDAV URL, the `-DownloadUrl` default of `build.ps1`.
+- It downloads each slice that is missing next to the `.exe`, or whose size differs from the server's, and moves it there, since Setup reads its slices from its own folder.
+- After a successful installation, a hidden PowerShell deletes the downloaded slices once Setup exits, because Setup keeps the last one open until then.
+- Without the server, it installs from the slices next to it. Without either, it stops with a message.
+
+The slices belong to the build that made them, so after every compact build, upload its `.bin` files (and the new `.exe`) to the share, replacing the old ones.
+
 ## Configuration (`config.ini`)
 
 The start screen edits `orbit_file`, `start_utc`, `orbit_fov`, `fov`, `tilt`, `azimuth`, `roll`, `color`, `earthshine` and `quality`,

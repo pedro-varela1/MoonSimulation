@@ -1,10 +1,13 @@
 # Builds the release executable and the SelenITA installer.
 # The data is taken from the paths in config.ini; only the files the simulator reads are packed.
-# -Compact builds the ~5 GB variant without the high-resolution terrain, into output-compact.
+# -Compact builds the ~5 GB variant without the high-resolution terrain, into output-compact. Its Setup.exe downloads the
+# .bin slices it does not find next to it from -DownloadUrl (WebDAV of the public share https://cloud.cei.ita.br/s/6ac9HTioaAAMKxS),
+# so the .bin files of each new compact build must be uploaded there.
 param(
     [string]$Out = 'D:\LINNA\installer',
     [string]$Iscc = 'D:\LINNA\tools\InnoSetup6\ISCC.exe',
     [string]$Msys = 'C:\msys64',
+    [string]$DownloadUrl = 'https://cloud.cei.ita.br/public.php/dav/files/6ac9HTioaAAMKxS',
     [switch]$Compact
 )
 $ErrorActionPreference = 'Stop'
@@ -87,8 +90,14 @@ This is the compact installer (about 5.5 GB installed). It leaves out the high-r
 polar, about 38 GB): the camera view uses the global LOLA terrain (about 470 m per pixel), and the telemetry lists the
 high-resolution terrain as not installed. Running the full installer later over this installation adds it.
 '@
-    $disk = 'about 5.5 GB'
+    $disk = 'about 5.5 GB, plus about 4 GB while the data files are downloaded'
     $pages = 'choose the folder and whether to create a desktop shortcut'
+    $get = @"
+1. Only $setup.exe is needed. When the $setup-*.bin data files are not next to it, Setup downloads
+   them (about 4 GB) from the SelenITA server before installing, which needs an internet connection and write access
+   to the installer's folder, and deletes them once the installation succeeds. With the .bin files next to the .exe,
+   it installs without internet.
+"@
 } else {
     $variant = 'full installer'
     $about = @'
@@ -98,6 +107,10 @@ SLDEM2015 512 ppd (about 59 m per pixel) up to 60 degrees of latitude and LOLA 6
 '@
     $disk = 'about 44 GB for the Full installation, about 5.5 GB for the Compact one'
     $pages = 'choose the folder, the installation type (Full, Compact or Custom) and whether to create a desktop shortcut'
+    $get = @"
+1. Keep $setup.exe and all the $setup-*.bin files in the same folder. To take them to another
+   computer, copy (or zip) the whole folder.
+"@
 }
 Save "$stage\README.txt" @"
 SelenITA Lunar Orbit Simulator $version - $variant
@@ -117,8 +130,7 @@ REQUIREMENTS
 - Nothing else: the installer carries every library and data file the simulator needs.
 
 INSTALL
-1. Keep $setup.exe and all the $setup-*.bin files in the same folder. To take them to another
-   computer, copy (or zip) the whole folder.
+$get
 2. Run $setup.exe. No administrator rights are needed: it installs for the current Windows user, by
    default in %LOCALAPPDATA%\Programs\SelenITA.
 3. Accept the MIT license, $pages.
@@ -186,7 +198,7 @@ The bundled third-party libraries keep their own licenses, in the licenses folde
 $defines = @("/DStage=$stage", "/DOutputDir=$output", "/DSpiceDir=$(Source spice_dir)", "/DStarCatalog=$(Source star_catalog)",
     "/DEarthTexture=$(Source earth_texture)", "/DLolaDem=$(Source lola_dem)", "/DKitColor=$(Source kit_color)", "/DHapkeDir=$(Source hapke_dir)",
     "/DWac643=$(Source wac_643)", "/DWac566=$(Source wac_566)", "/DWac415=$(Source wac_415)")
-$defines += if ($Compact) { '/DCompact' } else { "/DSldemDir=$(Source sldem_dir)", "/DPolarDir=$(Source polar_dir)" }
+$defines += if ($Compact) { '/DCompact', "/DDownloadUrl=$DownloadUrl" } else { "/DSldemDir=$(Source sldem_dir)", "/DPolarDir=$(Source polar_dir)" }
 & $Iscc @defines "$PSScriptRoot\selenita.iss"
 if ($LASTEXITCODE) { throw 'installer compilation failed' }
 Copy-Item "$stage\README.txt", "$stage\LICENSE.txt" $output
