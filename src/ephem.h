@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 
+// reference sphere of the maps and altitudes (km), astronomical unit (km), solar effective temperature (K)
+constexpr double MOON_R = 1737.4, AU = 149597870.7, TSUN = 5772;
+
 namespace ephem {
 // point source in J2000: p.w = 0 unit direction (star), p.w = 1 position in km from the Moon (planet)
 struct Source { glm::dvec4 p; double vmag, teff; };

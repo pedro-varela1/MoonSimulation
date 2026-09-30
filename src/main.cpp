@@ -3,6 +3,7 @@
 #include "app.h"
 #include "ephem.h"
 #include "platform.h"
+#include "report.h"
 #include "ui.h"
 
 // ask hybrid-graphics drivers for the dedicated GPU
@@ -60,7 +61,7 @@ void load(App& a) {
         glfwPollEvents();
         if (glfwWindowShouldClose(a.win)) exit(0);
         ui::frame();
-        ui::loading(stage, done);
+        ui::progress("Loading data", stage, done, "The first load reads ~3.5 GB of data from disk");
         ui::present();
     };
     progress("Orbit: fit and interpolation", 0);
@@ -85,6 +86,26 @@ void load(App& a) {
                 fatal(std::string("There is not enough video memory for the ") + QUALITY[level] + " quality.\n\nStart the simulator again and choose a lower quality on the start screen.");
     }
     progress("Ready", 1);
+}
+
+// orbit report instead of the simulation: a CSV line per orbit file row, saved where the user picks, then back to the start screen
+void report(App& a) {
+    const std::string& f = a.cfg.orbitFile;
+    size_t dot = f.find_last_of('.'), slash = f.find_last_of('/');
+    std::string path = saveFileDialog(a.win, (dot != std::string::npos && (slash == std::string::npos || dot > slash) ? f.substr(0, dot) : f) + "_report.csv");
+    if (path.empty()) return;
+    load(a);
+    size_t rows = a.orbit.times().size();
+    bool ok = writeReport(a, path, [&](size_t done) {
+        glfwPollEvents();
+        if (glfwWindowShouldClose(a.win)) exit(0);
+        char stage[64];
+        snprintf(stage, sizeof stage, "%zu of %zu orbit file rows", done, rows);
+        ui::frame();
+        ui::progress("Writing the orbit report", stage, float(done) / rows, path.c_str());
+        ui::present();
+    });
+    a.notice = ok ? "Report saved: " + path + " (" + std::to_string(rows) + " rows)" : "Could not write the report to " + path;
 }
 
 }
@@ -129,9 +150,10 @@ int main(int argc, char** argv) {
         glfwPollEvents();
         if (!a.running) {
             ui::frame();
-            bool start = ui::intro(a);
+            ui::Start start = ui::intro(a);
             ui::present();
-            if (start) {
+            if (start == ui::Start::report) report(a);
+            if (start == ui::Start::simulate) {
                 load(a);
                 fullscreen(a.win);
                 a.running = true;

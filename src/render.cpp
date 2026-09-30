@@ -4,14 +4,13 @@
 #include <tiny_obj_loader.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <cstdio>
 #include <fstream>
 
 namespace {
 
 struct FrameUBO { glm::vec4 sunDir, earthDir, light, sldemWin, polarWin; glm::mat3x4 earthToMe; };
 struct ViewUBO { glm::vec4 eye, right, up, fwd, size; };
-constexpr double PI = 3.14159265358979, AU = 149597870.7, RSUN = 695700, REARTH = 6371, RMOON = 1737.4, ZNEAR = 1e-5, VSUN = -26.74, TSUN = 5772;
+constexpr double PI = 3.14159265358979, RSUN = 695700, REARTH = 6371, ZNEAR = 1e-5, VSUN = -26.74;
 constexpr double STAR_PEAK = 0.009;  // orbit window: linear display value of a star at orbit_star_mag (sRGB ~24/255)
 constexpr int FOV_N = 16;  // orbit window: camera field of view grid, cells per image side
 
@@ -85,9 +84,10 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     camUbo = buffer(sizeof(ViewUBO), nullptr, GL_DYNAMIC_STORAGE_BIT);
     viewUbo = buffer(sizeof(ViewUBO), nullptr, GL_DYNAMIC_STORAGE_BIT);
     const GLbitfield map = GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
-    float probe0[2] = {1, 0}, exp0[132] = {};
+    float probe0[5] = {1, 0}, exp0[132] = {};
     exp0[128] = 3;
     probeBuf = buffer(sizeof probe0, probe0, map);
+    probeIn = buffer(2 * sizeof(glm::vec4), nullptr, GL_DYNAMIC_STORAGE_BIT);
     expBuf = buffer(sizeof exp0, exp0, map);
     probeMap = static_cast<const float*>(glMapNamedBufferRange(probeBuf, 0, sizeof probe0, map));
     expMap = static_cast<const float*>(glMapNamedBufferRange(expBuf, 0, sizeof exp0, map));
@@ -195,9 +195,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glNamedBufferSubData(skyBuf, 2 * stars * sizeof(glm::vec4), sizeof planets, planets);
     glProgramUniformMatrix3fv(sky, 0, 1, GL_FALSE, glm::value_ptr(glm::mat3(s.j2000ToMe)));
 
-    GLuint tex[11] = {terrain->lola, terrain->albedo, terrain->hapke, sldem->tex, sldem->cover, camTex, capH, capA, polar->tex, polar->cover, terrain->earth};
-    glBindTextures(0, 11, tex);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUbo);
+    bindData();
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, probeBuf);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, expBuf);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, skyBuf);
@@ -216,8 +214,11 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
         glDepthMask(GL_TRUE);
     };
 
+    glm::vec4 at[2] = {glm::vec4(glm::vec3(s.sat), 0), f.sunDir};
+    glNamedBufferSubData(probeIn, 0, sizeof at, at);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, probeIn);
     glUseProgram(probe);
-    glUniform3fv(0, 1, glm::value_ptr(glm::vec3(s.sat)));
+    glUniform1ui(0, 1);
     glDispatchCompute(1, 1, 1);
 
     glBindFramebuffer(GL_FRAMEBUFFER, camFbo);
@@ -279,8 +280,8 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
         const Camera& c = s.cam;
         auto ground = [&](double x, double y) {
             glm::dvec3 d = glm::normalize(c.fwd + x * c.tanX * c.right + y * c.tanY * c.up);
-            double b = glm::dot(c.eye, d), disc = b * b - glm::dot(c.eye, c.eye) + RMOON * RMOON, t = -b - std::sqrt(std::max(disc, 0.0));
-            return glm::vec4(glm::vec3(c.eye + (disc > 0 && t > 0 ? t : std::sqrt(glm::dot(c.eye, c.eye) - RMOON * RMOON)) * d - v.eye), 1);
+            double b = glm::dot(c.eye, d), disc = b * b - glm::dot(c.eye, c.eye) + MOON_R * MOON_R, t = -b - std::sqrt(std::max(disc, 0.0));
+            return glm::vec4(glm::vec3(c.eye + (disc > 0 && t > 0 ? t : std::sqrt(glm::dot(c.eye, c.eye) - MOON_R * MOON_R)) * d - v.eye), 1);
         };
         const double cx[5] = {-1, 1, 1, -1, -1}, cy[5] = {1, 1, -1, -1, 1};
         std::vector<glm::vec4> fov{glm::vec4(glm::vec3(c.eye - v.eye), 1)};
@@ -302,7 +303,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
         glDepthMask(GL_TRUE);
     }
     // the satellite at satScale times its size; enlarged, it is drawn over the Moon unless it is behind it
-    double dist = glm::length(s.sat - v.eye), b = glm::dot(v.eye, s.sat - v.eye) / dist, disc = b * b - glm::dot(v.eye, v.eye) + RMOON * RMOON;
+    double dist = glm::length(s.sat - v.eye), b = glm::dot(v.eye, s.sat - v.eye) / dist, disc = b * b - glm::dot(v.eye, v.eye) + MOON_R * MOON_R;
     double hit = -b - std::sqrt(std::max(disc, 0.0));
     if (meshVerts) {
         glm::dvec3 r = glm::radians(cfg->objRotation);
@@ -314,14 +315,48 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
         glUniform1i(2, 2);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, meshBuf);
         glDrawArrays(GL_TRIANGLES, 0, meshVerts);
-    } else {
+    } else {  // marker at the track's current point
         glUniform1i(2, 1);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, trackBuf);
         glDrawArrays(GL_POINTS, 0, 1);
     }
     glDisable(GL_DEPTH_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    satVis = probeMap[0];
-    satAbove = probeMap[1];
+    probed = {probeMap[0], probeMap[1], glm::vec3(probeMap[2], probeMap[3], probeMap[4])};
     ev = expMap[128];
 }
 
+void Renderer::bindData() {
+    GLuint tex[11] = {terrain->lola, terrain->albedo, terrain->hapke, sldem->tex, sldem->cover, camTex, capH, capA, polar->tex, polar->cover, terrain->earth};
+    glBindTextures(0, 11, tex);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUbo);
+}
+
+std::vector<Probe> Renderer::probeAll(const std::vector<glm::dvec3>& pos, const std::vector<glm::dvec3>& sun) {
+    constexpr size_t CHUNK = 1 << 16;  // points per dispatch, far below the driver's time limit
+    std::vector<Probe> out(pos.size());
+    std::vector<glm::vec4> in(2 * CHUNK);
+    GLuint inBuf = buffer(sizeof(glm::vec4) * in.size(), nullptr, GL_DYNAMIC_STORAGE_BIT), outBuf = buffer(sizeof(Probe) * CHUNK, nullptr, 0);
+    FrameUBO global{};  // no streamed windows until the next draw uploads the frame again
+    glNamedBufferSubData(frameUbo, 0, sizeof global, &global);
+    bindData();
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, outBuf);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, inBuf);
+    glUseProgram(probe);
+    for (size_t i0 = 0; i0 < pos.size(); i0 += CHUNK) {
+        size_t n = std::min(CHUNK, pos.size() - i0);
+        for (size_t i = 0; i < n; i++) {
+            double d = glm::length(sun[i0 + i]);
+            in[2 * i] = glm::vec4(glm::vec3(pos[i0 + i]), 0);
+            in[2 * i + 1] = glm::vec4(glm::vec3(sun[i0 + i] / d), std::asin(RSUN / d));
+        }
+        glNamedBufferSubData(inBuf, 0, sizeof(glm::vec4) * 2 * n, in.data());
+        glUniform1ui(0, GLuint(n));
+        glDispatchCompute(GLuint((n + 63) / 64), 1, 1);
+        glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+        glGetNamedBufferSubData(outBuf, 0, sizeof(Probe) * n, &out[i0]);
+    }
+    glDeleteBuffers(1, &inBuf);
+    glDeleteBuffers(1, &outBuf);
+    return out;
+}

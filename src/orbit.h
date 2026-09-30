@@ -13,7 +13,10 @@ struct Orbit {
     State at(double t) const;
     double begin() const { return t.front(); }
     double end() const { return t.back(); }
+    const std::vector<double>& times() const { return t; }  // one per file row, seconds from utc0
+    std::string utc(double time) const;  // ISO UTC with milliseconds, on the file's own clock, of a time from utc0
 private:
+    double t0 = 0;  // first row, seconds from 1970 in UTC
     std::vector<double> t;
     std::vector<glm::dvec3> p, v;
 };

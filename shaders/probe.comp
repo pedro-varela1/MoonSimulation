@@ -1,9 +1,14 @@
-layout(local_size_x = 1) in;
-layout(std430, binding = 2) buffer Probe { float vis, above; };
-layout(location = 0) uniform vec3 sat;
+layout(local_size_x = 64) in;
+layout(std430, binding = 2) writeonly buffer Probe { float res[]; };  // per point: Sun visibility, height above the terrain, albedo I/F 643, 566, 415 nm
+layout(std430, binding = 6) readonly buffer Points { vec4 pts[]; };   // per point: position (km), then Sun direction and angular radius
+layout(location = 0) uniform uint count;
 
 void main() {
-    float r = length(sat);
-    above = r - R - heightAt(sat / r, 0.0);
-    vis = visibility(sat, sunDir.xyz, sunDir.w, 0.001);
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= count) return;
+    vec3 p = pts[2 * i].xyz, n = normalize(p), a = albedoIF(n, vec2(0.0), vec2(0.0), 0.1);  // albedo below the point, finest level
+    vec4 s = pts[2 * i + 1];
+    res[5 * i] = visibility(p, s.xyz, s.w, 0.001);
+    res[5 * i + 1] = length(p) - R - heightAt(n, 0.0);
+    res[5 * i + 2] = a.r, res[5 * i + 3] = a.g, res[5 * i + 4] = a.b;
 }

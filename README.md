@@ -8,7 +8,22 @@ The program opens on a **start screen**. It is pre-filled from `config.ini` and 
 - the camera FOV, tilt, azimuth and roll;
 - the color mode and earthshine.
 
-The start time is checked against the file's range. The button starts only when every field is valid, and the values are then saved back to `config.ini`. A loading screen shows the progress.
+The start time is checked against the file's range. The buttons work only when every field is valid, and the values are then saved back to `config.ini`. A loading screen shows the progress.
+
+**GENERATE ORBIT REPORT** writes a CSV instead of opening the simulation. It asks where to save it (`<orbit>_report.csv` is suggested), writes one line per orbit file row (a repeated time stamp once), and returns to the start screen, which shows where the report went. The 30-day, 1 s reports (2.6 million rows, ~330 MB) take about 30 s after loading.
+
+| Column | Meaning |
+| --- | --- |
+| `date`, `time_utc` | Time of the orbit file row, as written in the file |
+| `orbit` | Orbit number, as in the telemetry: time since the first row over the orbital period, from 1 |
+| `latitude_deg`, `longitude_deg`, `altitude_km` | Satellite in MOON_ME, altitude over the 1737.4 km sphere |
+| `above_terrain_km` | Height over the terrain. It uses the global LOLA 64 ppd terrain (the live telemetry uses SLDEM when streamed), so it can differ by tens of meters |
+| `speed_km_s` | Satellite speed |
+| `sun_azimuth_deg`, `sun_elevation_deg` | Sun below the satellite: azimuth clockwise from north, elevation over the local horizon |
+| `illumination_pct` | Visible fraction of the solar disc at the satellite: 0 in eclipse, partial in the penumbra |
+| `albedo_643`, `albedo_566`, `albedo_415` | WAC Hapke-normalized I/F below the satellite |
+| `camera_tilt_deg`, `camera_azimuth_deg`, `camera_roll_deg` | Camera pointing from the start screen |
+| `center_gsd_m` | Ground sample distance at the image center (empty when the boresight misses the Moon) |
 
 The simulation then fills the whole monitor the window was on, in one screen:
 
@@ -19,7 +34,9 @@ The simulation then fills the whole monitor the window was on, in one screen:
   - LROC WAC Hapke-normalized color (643/566/415 nm natural color) with Hapke photometry;
   - soft shadows from the solar disc, earthshine and auto-exposure.
 - **Telemetry** (below the camera) – UTC, elapsed time, orbit number, satellite position, altitude, velocity,
-  illumination, camera pointing, exposure, ground sample distance, frame rate and streaming state.
+  Sun azimuth (clockwise from north) and elevation below the satellite, illumination, surface albedo below the
+  satellite (WAC Hapke-normalized I/F at 643/566/415 nm), camera pointing, exposure, ground sample distance, frame rate
+  and streaming state.
 - **Controls** (bottom) – a timeline over the whole orbit file, time jumps, pause, speed, follow and reset the view, back to
   the start screen, quit.
 
@@ -216,5 +233,5 @@ The GPU in use is shown in the telemetry panel.
 - With `tilt = 0` and `fov = 120` at 30 km the camera sees no sky: the horizon is ~79° from nadir, and the image corners ~68°.
 - The camera is a rectilinear (pinhole) lens: at 120° it stretches objects near the edges (about 2× in the corners), the Sun and craters alike.
 - The Earth's clouds are a fixed 2002 composite. At the current sizes the Earth is 16–34 px wide, so its atmosphere shows only as a tint and a ~1 px bluish rim.
-- The Earth does not eclipse the Sun in the terrain lighting.
+- The Earth does not eclipse the Sun, neither in the terrain lighting nor in the satellite illumination (telemetry and orbit report).
 - Above ×150 the DEM streaming pauses and the 474 m LOLA is shown.

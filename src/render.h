@@ -23,12 +23,18 @@ struct Scene {
 // quality from the video memory the driver reports (NVIDIA dedicated, AMD free): 0 high, 1 medium, 2 low (integrated or unknown)
 int detectQuality(double& gb);
 
+// found at a point: Sun visibility (0 eclipse .. 1), height above the terrain (km), albedo I/F below it (643, 566, 415 nm)
+struct Probe { float vis, above; glm::vec3 albedo; };
+
 class Renderer {
 public:
-    float satVis = 1, satAbove = 0, ev = 0;
+    Probe probed{1, 0, glm::vec3(0)};  // at the satellite, one frame late
+    float ev = 0;
     void init(const Config& c, const Terrain& t, const Streamer& sldem, const Streamer& polar, const std::vector<ephem::Source>& stars);
     void buildCaps();
     void draw(const Scene& s, glm::ivec2 orbitSize);  // orbit view and camera image, both sRGB RGBA8 textures
+    // many points at once, with the global terrain only (not the streamed windows); positions and Sun positions in MOON_ME, km
+    std::vector<Probe> probeAll(const std::vector<glm::dvec3>& pos, const std::vector<glm::dvec3>& sun);
     GLuint orbitImage() const { return viewColor; }
     GLuint cameraImage() const { return camView; }
 
@@ -37,10 +43,11 @@ private:
     const Terrain* terrain = nullptr;
     const Streamer *sldem = nullptr, *polar = nullptr;
     GLuint moon = 0, sky = 0, show = 0, overlay = 0, hist = 0, resolve = 0, probe = 0, vao = 0;
-    GLuint frameUbo = 0, camUbo = 0, viewUbo = 0, probeBuf = 0, expBuf = 0, trackBuf = 0, fovBuf = 0, meshBuf = 0, skyBuf = 0;
+    GLuint frameUbo = 0, camUbo = 0, viewUbo = 0, probeBuf = 0, probeIn = 0, expBuf = 0, trackBuf = 0, fovBuf = 0, meshBuf = 0, skyBuf = 0;
     GLuint camTex = 0, camDepth = 0, camFbo = 0, camView = 0, camViewFbo = 0, viewColor = 0, viewDepth = 0, viewFbo = 0, capH = 0, capA = 0;
     const float *probeMap = nullptr, *expMap = nullptr;
     glm::ivec2 viewSize{0};
     int meshVerts = 0, stars = 0;
     void loadObj(const std::string& path);
+    void bindData();  // terrain textures and frame uniforms
 };

@@ -133,13 +133,17 @@ float visibility(vec3 p, vec3 L, float alpha, float fp) {
     float a = length(p) - R, el = asin(dot(L, n));
     if (el < -acos(clamp((R + HMIN) / (R + max(a, HMIN)), 0.0, 1.0)) - alpha) return 0.0;
     if (el > atan(SLOPE) + alpha) return 1.0;
-    float x = 1.0, t = 2.0 * fp;
+    float x = 1.0, t = 2.0 * fp, b = dot(p, L), disc = b * b - dot(p, p) + (R + HMAX) * (R + HMAX);
+    if (a > HMAX) {  // above the relief shell (the satellite): march from where the ray enters it, if it does
+        if (disc < 0.0 || b > 0.0) return 1.0;
+        t = -b - sqrt(disc);
+    }
     for (int i = 0; i < 128; i++) {
         vec3 q = p + t * L;
         float r = length(q);
-        if (r > R + HMAX) break;
         vec3 nq = q / r;
         float c = max(fp, t * alpha), sb = dot(L, nq), ch = sqrt(max(1.0 - sb * sb, 0.0));
+        if (r > R + HMAX && sb > 0.0) break;
         float g = r - R - heightAt(nq, log2(c / TEXEL)) + 0.25 * fp;
         x = min(x, g * ch / (t * alpha));
         if (x <= -1.0) break;

@@ -16,8 +16,6 @@ namespace ephem {
 
 namespace {
 
-constexpr double AU = 149597870.7, TSUN = 5772;
-
 glm::dvec3 position(const char* body, double et, const char* frame = "MOON_ME") {
     SpiceDouble p[3], lt;
     spkpos_c(body, et, frame, "LT", "MOON", p, &lt);

@@ -47,7 +47,7 @@ Name: "compact"; Description: "Compact installation (global terrain only)"
 Name: "custom"; Description: "Custom installation"; Flags: iscustom
 
 [Components]
-Name: "core"; Description: "Simulator, global terrain and color, sky and the SelenITA orbit"; Types: full compact custom; Flags: fixed
+Name: "core"; Description: "Simulator, global terrain and color, sky and the SelenITA orbits"; Types: full compact custom; Flags: fixed
 Name: "sldem"; Description: "High-resolution terrain: SLDEM2015 512 ppd, latitudes up to 60 degrees"; Types: full
 Name: "polar"; Description: "High-resolution polar terrain: LOLA 60 m, latitudes above 60 degrees"; Types: full
 #endif

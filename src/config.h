@@ -2,7 +2,6 @@
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <map>

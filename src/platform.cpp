@@ -15,6 +15,28 @@ std::wstring wide(const std::string& s) {
     return w;
 }
 
+// Windows open dialog, or save dialog when ext is set; UTF-8 with forward slashes, empty when cancelled
+std::string fileDialog(GLFWwindow* owner, const std::string& current, const wchar_t* filter, const wchar_t* ext) {
+    wchar_t file[1024] = L"";
+    std::wstring start = wide(current);
+    std::replace(start.begin(), start.end(), L'/', L'\\');
+    wcsncpy(file, start.c_str(), 1023);
+    OPENFILENAMEW o{};
+    o.lStructSize = sizeof o;
+    o.hwndOwner = glfwGetWin32Window(owner);
+    o.lpstrFilter = filter;
+    o.lpstrDefExt = ext;
+    o.lpstrFile = file;
+    o.nMaxFile = 1024;
+    o.Flags = OFN_NOCHANGEDIR | (ext ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    if (!(ext ? GetSaveFileNameW(&o) : GetOpenFileNameW(&o))) return "";
+    char out[4096];
+    WideCharToMultiByte(CP_UTF8, 0, file, -1, out, sizeof out, nullptr, nullptr);
+    std::string s = out;
+    std::replace(s.begin(), s.end(), '\\', '/');
+    return s;
+}
+
 }
 
 void fatal(const std::string& message) {
@@ -31,21 +53,10 @@ void useExeDir() {
 }
 
 std::string openFileDialog(GLFWwindow* owner, const std::string& current) {
-    wchar_t file[1024] = L"";
-    std::wstring start = wide(current);
-    std::replace(start.begin(), start.end(), L'/', L'\\');
-    wcsncpy(file, start.c_str(), 1023);
-    OPENFILENAMEW o{};
-    o.lStructSize = sizeof o;
-    o.hwndOwner = glfwGetWin32Window(owner);
-    o.lpstrFilter = L"STK report (*.txt)\0*.txt\0All files\0*.*\0";
-    o.lpstrFile = file;
-    o.nMaxFile = 1024;
-    o.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetOpenFileNameW(&o)) return current;
-    char out[4096];
-    WideCharToMultiByte(CP_UTF8, 0, file, -1, out, sizeof out, nullptr, nullptr);
-    std::string s = out;
-    std::replace(s.begin(), s.end(), '\\', '/');
-    return s;
+    std::string s = fileDialog(owner, current, L"STK report (*.txt)\0*.txt\0All files\0*.*\0", nullptr);
+    return s.empty() ? current : s;
+}
+
+std::string saveFileDialog(GLFWwindow* owner, const std::string& suggested) {
+    return fileDialog(owner, suggested, L"CSV table (*.csv)\0*.csv\0All files\0*.*\0", L"csv");
 }

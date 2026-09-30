@@ -1,4 +1,5 @@
 #include "orbit.h"
+#include "ephem.h"
 #include "platform.h"
 #include <algorithm>
 #include <charconv>
@@ -10,7 +11,7 @@
 
 namespace {
 
-constexpr double R = 1737.4, WINDOW = 61;
+constexpr double WINDOW = 61;
 constexpr size_t SIDE = 4;  // fewest samples on each side of a fit window
 
 long long daysFromCivil(int y, int m, int d) {
@@ -18,6 +19,14 @@ long long daysFromCivil(int y, int m, int d) {
     long long era = (y >= 0 ? y : y - 399) / 400;
     unsigned yoe = unsigned(y - era * 400), doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+}
+
+void civilFromDays(long long z, int& y, int& m, int& d) {
+    z += 719468;
+    long long era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = unsigned(z - era * 146097), yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
+    d = int(doy - (153 * mp + 2) / 5 + 1), m = int(mp < 10 ? mp + 3 : mp - 9), y = int(yoe + era * 400 + (m <= 2));
 }
 
 template <class T> const char* parse(const char* s, const char* e, T& v) {
@@ -87,11 +96,11 @@ void Orbit::load(const std::string& path, const glm::dmat3& rot) {
     f.seekg(0).read(buf.data(), buf.size());
 
     std::vector<glm::dvec3> raw;
-    double t0 = 0;
     t.clear();
     rows(buf, true, [&](const Row& w) {
         if (t.empty()) t0 = w.time(), utc0 = w.iso();
-        double la = glm::radians(w.lat), lo = glm::radians(w.lon), r = R + w.alt;
+        else if (w.time() - t0 <= t.back()) return;  // a repeated or earlier time adds nothing and would break the interpolation
+        double la = glm::radians(w.lat), lo = glm::radians(w.lon), r = MOON_R + w.alt;
         t.push_back(w.time() - t0);
         raw.push_back(rot * (r * glm::dvec3(std::cos(la) * std::cos(lo), std::cos(la) * std::sin(lo), std::sin(la))));
     });
@@ -148,6 +157,15 @@ bool Orbit::span(const std::string& path, std::string& first, double& seconds) {
     first = a.iso();
     seconds = b.time() - a.time();
     return true;
+}
+
+std::string Orbit::utc(double time) const {
+    long long ms = std::llround((t0 + time) * 1000);
+    int y, m, d, s = int(ms % 86400000);
+    civilFromDays(ms / 86400000, y, m, d);
+    char out[32];
+    snprintf(out, sizeof out, "%04d-%02d-%02dT%02d:%02d:%02d.%03d", y, m, d, s / 3600000, s / 60000 % 60, s / 1000 % 60, s % 1000);
+    return out;
 }
 
 State Orbit::at(double x) const {

@@ -7,7 +7,6 @@
 #include <stb_image.h>
 #include <cfloat>
 #include <cstdarg>
-#include <cstring>
 #include <filesystem>
 #include <functional>
 #include "ephem.h"
@@ -343,7 +342,7 @@ void present() {
     glfwSwapBuffers(window);
 }
 
-bool intro(App& a) {
+Start intro(App& a) {
     Config& c = a.cfg;
     if (!form.ready) {
         form = Form{};
@@ -411,21 +410,36 @@ bool intro(App& a) {
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
-    float bw = 320 * S, bh = 50 * S;
-    ImGui::SetCursorPos({(size.x - bw) / 2, ImGui::GetCursorPosY() + 14 * S});
+    float bw = 320 * S, bh = 50 * S, gap = 16 * S;
+    ImGui::SetCursorPos({(size.x - 2 * bw - gap) / 2, ImGui::GetCursorPosY() + 14 * S});
     ImGui::BeginDisabled(!valid);
+    ImGui::PushFont(bold, 18);
     ImGui::PushStyleColor(ImGuiCol_Button, hex(ORANGE));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hex(GOLD));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, hex(GOLD));
     ImGui::PushStyleColor(ImGuiCol_Text, hex(BG));
-    ImGui::PushFont(bold, 18);
-    bool start = ImGui::Button(valid ? "START SIMULATION" : "FIX THE FIELDS", {bw, bh});
-    ImGui::PopFont();
+    Start pick = ImGui::Button(valid ? "START SIMULATION" : "FIX THE FIELDS", {bw, bh}) ? Start::simulate : Start::none;
     ImGui::PopStyleColor(4);
+    ImGui::SameLine(0, gap);
+    ImGui::PushStyleColor(ImGuiCol_Text, hex(GOLD));
+    ImGui::PushStyleColor(ImGuiCol_Border, hex(GOLD));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f * S);
+    if (ImGui::Button("GENERATE ORBIT REPORT", {bw, bh})) pick = Start::report;
+    ImGui::SetItemTooltip("Instead of simulating, save a CSV with one line per orbit file row: time, satellite, Sun and camera");
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+    ImGui::PopFont();
     ImGui::EndDisabled();
+    if (!a.notice.empty()) {
+        ImGui::SetCursorPos({(size.x - cw) / 2, ImGui::GetCursorPosY() + 10 * S});
+        ImGui::PushTextWrapPos((size.x + cw) / 2);
+        ImGui::TextColored(hex(MUTED), "%s", a.notice.c_str());
+        ImGui::PopTextWrapPos();
+    }
     ImGui::End();
 
-    if (!start) return false;
+    if (pick == Start::none) return pick;
+    a.notice.clear();
     c.orbitFile = form.file, c.startUtc = form.start, c.orbitFov = form.orbitFov, c.fov = form.fov, c.tilt = form.tilt;
     c.azimuth = form.azimuth, c.roll = form.roll, c.gray = form.color == 1, c.earthshine = form.earthshine;
     c.quality = form.quality ? QUALITY[form.quality - 1] : "auto";
@@ -433,12 +447,12 @@ bool intro(App& a) {
                                    {"tilt", num(c.tilt)}, {"azimuth", num(c.azimuth)}, {"roll", num(c.roll)},
                                    {"color", c.gray ? "gray" : "natural"}, {"earthshine", c.earthshine ? "1" : "0"}, {"quality", c.quality}});
     form.ready = false;
-    return true;
+    return pick;
 }
 
-void loading(const char* stage, float done) {
+void progress(const char* heading, const char* stage, float done, const char* note) {
     ImVec2 size = ImGui::GetIO().DisplaySize;
-    fullWindow("loading");
+    fullWindow("progress");
     ImDrawList* dl = ImGui::GetWindowDrawList();
     backdrop(dl, size, 104 * S, 112 * S, 20 * S);
     title(dl, size.x / 2, 26 * S, 40, 0.5f);
@@ -446,13 +460,13 @@ void loading(const char* stage, float done) {
     ImVec2 p0((size.x - w) / 2, y), p1(p0.x + w, y + 12 * S);
     char pct[16];
     snprintf(pct, sizeof pct, "%.0f%%", done * 100);
-    text(dl, bold, 22, {size.x / 2, y - 76 * S}, TEXT, "Loading data", 0.5f);
+    text(dl, bold, 22, {size.x / 2, y - 76 * S}, TEXT, heading, 0.5f);
     text(dl, regular, 15, {size.x / 2, y - 38 * S}, MUTED, stage, 0.5f);
     dl->AddRectFilled(p0, p1, u32(FIELD), 6 * S);
     dl->AddRect(p0, p1, u32(LINE), 6 * S);
     if (done > 0) dl->AddRectFilled(p0, {p0.x + w * std::min(done, 1.f), p1.y}, u32(GOLD), 6 * S);
     text(dl, mono, 15, {size.x / 2, y + 26 * S}, GOLD, pct, 0.5f);
-    text(dl, regular, 13, {size.x / 2, y + 64 * S}, MUTED, "The first load reads ~3.5 GB of data from disk", 0.5f);
+    text(dl, regular, 13, {size.x / 2, y + 64 * S}, MUTED, note, 0.5f);
     ImGui::End();
 }
 
@@ -517,10 +531,8 @@ void run(App& a, const Scene& s, const Layout& L) {
 
     // telemetry
     State st = a.orbit.at(a.t);
-    double r = glm::length(st.p), sunEl = glm::degrees(std::asin(glm::dot(glm::normalize(s.sun), st.p / r)));
-    glm::dvec3 d = -s.att[2];
-    double b = glm::dot(st.p, d), disc = b * b - r * r + MOON_R * MOON_R, rangeKm = disc > 0 && -b - std::sqrt(disc) > 0 ? -b - std::sqrt(disc) : -1;
-    double orbitN = (a.t - a.orbit.begin()) / a.orbit.period;
+    glm::dvec2 sun = sunAzEl(st.p, s.sun);
+    double r = glm::length(st.p), gsd = a.gsd(st), orbitN = (a.t - a.orbit.begin()) / a.orbit.period;
     ImGui::SetCursorScreenPos({float(L.info.x), float(L.info.y)});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * k, 12 * k});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8 * k, 4 * k});
@@ -539,10 +551,13 @@ void run(App& a, const Scene& s, const Layout& L) {
         row("Latitude", "%.3f°", glm::degrees(std::asin(st.p.z / r)));
         row("Longitude", "%.3f°", glm::degrees(std::atan2(st.p.y, st.p.x)));
         row("Altitude", "%.2f km", r - MOON_R);
-        row("Above terrain", "%.2f km", a.renderer.satAbove);
+        row("Above terrain", "%.2f km", a.renderer.probed.above);
         row("Speed", "%.3f km/s", glm::length(st.v));
-        row("Sun elevation", "%.1f°", sunEl);
-        row("Illumination", a.renderer.satVis > 0 ? "%.0f%%" : "eclipse", a.renderer.satVis * 100);
+        row("Sun az / el", "%.1f° / %.1f°", sun.x, sun.y);
+        ImGui::SetItemTooltip("Sun below the satellite: azimuth clockwise from north, elevation over the local horizon");
+        row("Illumination", a.renderer.probed.vis > 0 ? "%.0f%%" : "eclipse", a.renderer.probed.vis * 100);
+        row("Albedo I/F", "%.3f %.3f %.3f", a.renderer.probed.albedo.r, a.renderer.probed.albedo.g, a.renderer.probed.albedo.b);
+        ImGui::SetItemTooltip("Surface albedo below the satellite: WAC Hapke-normalized reflectance (i = 60°, e = 0°, g = 60°) at 643, 566 and 415 nm");
         ImGui::TableNextColumn();
         section("CAMERA");
         row("Tilt / azimuth", "%.1f° / %.1f°", a.cfg.tilt, a.cfg.azimuth);
@@ -550,7 +565,7 @@ void run(App& a, const Scene& s, const Layout& L) {
         row("Color", "%s", a.cfg.gray ? "gray 643 nm" : "natural");
         row("Earthshine", "%s", a.cfg.earthshine ? "on" : "off");
         row("Exposure", "EV %.2f", a.renderer.ev);
-        if (rangeKm > 0) row("Center GSD", "%.1f m/px", rangeKm * 2 * s.cam.tanX / a.cfg.sensor.x * 1000);
+        if (gsd > 0) row("Center GSD", "%.1f m/px", gsd);
         else row("Center GSD", "sky");
         ImGui::Spacing();
         section("SYSTEM");

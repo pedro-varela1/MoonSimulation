@@ -1,4 +1,5 @@
 #include "terrain.h"
+#include "ephem.h"
 #include "platform.h"
 #include <tiffio.h>
 #include <zlib.h>
@@ -11,7 +12,7 @@
 namespace {
 
 constexpr float HSCALE = 12, IF_SCALE = 0.25f;
-constexpr double R = 1737.4, PC = 15520, PS = 0.06;
+constexpr double PC = 15520, PS = 0.06;
 constexpr int PN = 31040;
 
 TIFF* openTiff(const std::string& path) {
@@ -292,7 +293,7 @@ void Streamer::update(const glm::dvec3& center, const std::vector<glm::dvec3>& p
     auto has = [&](int tu, int ty) { return tu >= x0 && tu < x0 + WX && ty >= y0 && ty < y0 + WY && slot[slotOf(tu, ty)] == key(tag, tu, ty); };
     std::vector<uint8_t> cov(size_t(WX) * WY);
     std::vector<std::pair<double, uint32_t>> order;
-    double cosNeed = std::cos(needKm / R);
+    double cosNeed = std::cos(needKm / MOON_R);
     resident = 0;
     for (int ty = y0; ty < y0 + WY; ty++)
         for (int tu = x0; tu < x0 + WX; tu++) {
@@ -420,7 +421,7 @@ PolarDem::PolarDem(const std::string& d) : Streamer((PN + 255) / 256, (PN + 255)
 
 bool PolarDem::place(const glm::dvec3& c, int& x, int& y, int& tag) const {
     glm::dvec3 n = glm::normalize(c);
-    double p = n.z < 0 ? -1 : 1, t = 2 * R / (1 + p * n.z);
+    double p = n.z < 0 ? -1 : 1, t = 2 * MOON_R / (1 + p * n.z);
     tag = p < 0;
     x = std::clamp(int((PC + t * n.y / PS) / 256) - WX / 2, 0, NX - WX);
     y = std::clamp(int((PC + p * t * n.x / PS) / 256) - WY / 2, 0, NY - WY);
@@ -428,8 +429,8 @@ bool PolarDem::place(const glm::dvec3& c, int& x, int& y, int& tag) const {
 }
 
 glm::dvec3 PolarDem::tileCenter(int tag, int tx, int ty) const {
-    double p = tag ? -1 : 1, v = ((tx + 0.5) * 256 - PC) * PS, u = p * ((ty + 0.5) * 256 - PC) * PS, s = (u * u + v * v) / (4 * R * R);
-    return {u / (R * (1 + s)), v / (R * (1 + s)), p * (1 - s) / (1 + s)};
+    double p = tag ? -1 : 1, v = ((tx + 0.5) * 256 - PC) * PS, u = p * ((ty + 0.5) * 256 - PC) * PS, s = (u * u + v * v) / (4 * MOON_R * MOON_R);
+    return {u / (MOON_R * (1 + s)), v / (MOON_R * (1 + s)), p * (1 - s) / (1 + s)};
 }
 
 void PolarDem::read(int tag, int ty, int tx0, int tx1, std::vector<Job>& out) {
