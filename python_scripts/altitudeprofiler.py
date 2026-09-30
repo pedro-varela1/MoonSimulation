@@ -4,8 +4,9 @@ usage: python altitudeprofiler.py <orbit.txt>
 
 Writes outputs/<orbit>_altitudeprofile.csv and .png next to this script. The terrain is the simulator's: SLDEM2015
 512 ppd up to 60 deg of latitude and the LOLA 60 m polar stereographic DEMs above, with the data paths of config.ini.
-As in the simulator, the report's latitude and longitude are MOON_PA and are rotated to MOON_ME, the frame of the DEMs.
-Needs numpy, pandas, matplotlib and spiceypy.
+As in the simulator, the report's latitude and longitude are in the frame set by orbit_frame in config.ini: MOON_PA
+(the default), rotated to MOON_ME, the frame of the DEMs, or MOON_ME as they are.
+Needs numpy, pandas and matplotlib, and spiceypy for MOON_PA.
 """
 import re
 import sys
@@ -14,7 +15,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import spiceypy as sp
 
 R = 1737.4                        # reference sphere, km
 SLDEM_H, SLDEM_W = 15360, 23040   # one SLDEM file: 30 deg x 45 deg at 512 ppd
@@ -109,12 +109,16 @@ def polar(n, root, north):
 def main(orbit):
     cfg = config()
     df = read_orbit(orbit)
-    print(f"{len(df)} rows from {df.utc.iloc[0]} to {df.utc.iloc[-1]}", flush=True)
+    me = cfg.get("orbit_frame") == "ME"
+    print(f"{len(df)} rows from {df.utc.iloc[0]} to {df.utc.iloc[-1]}, latitude and longitude in {'MOON_ME' if me else 'MOON_PA'}", flush=True)
 
-    for k in sorted(Path(cfg["spice_dir"]).iterdir()):
-        sp.furnsh(str(k))
     lat, lon = np.radians(df.lat.to_numpy()), np.radians(df.lon.to_numpy())
-    n = np.column_stack([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)]) @ np.array(sp.pxform("MOON_PA", "MOON_ME", 0.0)).T
+    n = np.column_stack([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)])
+    if not me:
+        import spiceypy as sp
+        for k in sorted(Path(cfg["spice_dir"]).iterdir()):
+            sp.furnsh(str(k))
+        n = n @ np.array(sp.pxform("MOON_PA", "MOON_ME", 0.0)).T
     df["lat_me_deg"], df["lon_me_deg"] = np.degrees(np.arcsin(np.clip(n[:, 2], -1, 1))), np.degrees(np.arctan2(n[:, 1], n[:, 0]))
 
     print("terrain heights", flush=True)

@@ -3,7 +3,7 @@
 Real-time OpenGL 4.6 visualization of a CubeSat in lunar orbit (SelenITA).
 
 The program opens on a **start screen**. It is pre-filled from `config.ini` and holds:
-- the orbit file (with a *Browse…* file dialog) and the start time;
+- the orbit file (with a *Browse…* file dialog), the start time and the frame of its latitude and longitude (MOON_PA or MOON_ME);
 - the orbit view FOV;
 - the camera FOV, tilt, azimuth and roll;
 - the color mode and earthshine.
@@ -156,13 +156,14 @@ The slices belong to the build that made them, so after every compact build, upl
 
 ## Configuration (`config.ini`)
 
-The start screen edits `orbit_file`, `start_utc`, `orbit_fov`, `fov`, `tilt`, `azimuth`, `roll`, `color`, `earthshine` and `quality`,
+The start screen edits `orbit_file`, `start_utc`, `orbit_frame`, `orbit_fov`, `fov`, `tilt`, `azimuth`, `roll`, `color`, `earthshine` and `quality`,
 and writes them back to the file, keeping the comments. The other keys are set in the file only.
 A `#` starts a comment only at the beginning of a line or after a blank, so paths may contain `#`.
 
 | Key | Meaning |
 | --- | --- |
 | `obj_file`, `obj_scale`, `obj_rotation` | CubeSat model (empty = marker), units → meters, rotation in degrees X Y Z. Camera frame: x = image right, y = image top, −z = boresight. The SelenITA 16U model (`assets/cubsat`, in cm) uses `0.01` and `0 90 0`: the lens (+X face) points along the boresight, the smallest face (+Y) faces the flight direction and the solar panel face (−Y) the opposite |
+| `orbit_frame` | Frame of the orbit file latitude and longitude: `PA` (MOON_PA, rotated to MOON_ME) or `ME` (MOON_ME, used as is) |
 | `start_utc`, `speed` | Start time (empty = first row) and initial time factor |
 | `orbit_fov`, `orbit_gain` | Vertical FOV and fixed gain of the orbit view |
 | `orbit_star_mag` | Faintest star magnitude visible in the orbit view (6.5 ≈ naked eye) |
@@ -200,7 +201,7 @@ The GPU in use is shown in the telemetry panel.
 ## How it works
 
 - **Orbit**
-  - Latitude and longitude are read as MOON_PA and rotated to MOON_ME with `pxform`.
+  - Latitude and longitude are read as MOON_PA and rotated to MOON_ME with `pxform`, or as MOON_ME when `orbit_frame = ME`.
   - A local 4th-order least-squares fit (61 s window, widened to at least 4 samples on each side for sparse or irregular reports) removes the 0.001° quantization.
   - Cubic Hermite interpolation gives smooth position and velocity.
 - **Sun and Earth**: `spkpos(…, "MOON_ME", "LT", "MOON")` every frame.

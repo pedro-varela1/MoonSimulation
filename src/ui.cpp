@@ -36,7 +36,7 @@ std::string gpu;
 struct Form {
     char file[1024] = "", start[64] = "";
     double orbitFov = 45, fov = 120, tilt = 0, azimuth = 0, roll = 0, span = -1;
-    int color = 0, quality = 0;  // quality: 0 auto, then high, medium, low
+    int color = 0, frame = 0, quality = 0;  // frame: 0 MOON_PA, 1 MOON_ME; quality: 0 auto, then high, medium, low
     bool earthshine = true, ready = false;
     std::string checked, first;
 } form;
@@ -349,7 +349,7 @@ Start intro(App& a) {
         snprintf(form.file, sizeof form.file, "%s", c.orbitFile.c_str());
         snprintf(form.start, sizeof form.start, "%s", c.startUtc.c_str());
         form.orbitFov = c.orbitFov, form.fov = c.fov, form.tilt = c.tilt, form.azimuth = c.azimuth, form.roll = c.roll;
-        form.color = c.gray, form.earthshine = c.earthshine, form.ready = true;
+        form.color = c.gray, form.frame = c.orbitMe, form.earthshine = c.earthshine, form.ready = true;
         form.quality = int(std::find(QUALITY.begin(), QUALITY.end(), c.quality) - QUALITY.begin() + 1) % 4;
         form.checked = "\1";
     }
@@ -380,6 +380,7 @@ Start intro(App& a) {
     float cw = 660 * S;
     ImGui::SetCursorPos({(size.x - cw) / 2, 150 * S});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {24 * S, 18 * S});
+    ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, size.y - 280 * S});  // on small or scaled screens the form scrolls and the buttons stay visible
     ImGui::BeginChild("form", {cw, 0}, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY);
     section("ORBIT");
     field("Orbit file", errFile, [&] {
@@ -389,6 +390,7 @@ Start intro(App& a) {
         if (ImGui::Button("Browse…", {-1, 0})) snprintf(form.file, sizeof form.file, "%s", openFileDialog(window, form.file).c_str());
     });
     field("Start (UTC)", errStart, [&] { ImGui::InputText("##start", form.start, sizeof form.start); }, hint.c_str());
+    field("Lat/lon frame", "", [&] { ImGui::Combo("##frame", &form.frame, "MOON_PA (principal axes)\0MOON_ME (mean Earth)\0"); });
     ImGui::Spacing();
     section("ORBIT VIEW");
     field("Vertical FOV", errOrbitFov, [&] { ImGui::InputDouble("##ofov", &form.orbitFov, 1, 10, "%.1f°"); });
@@ -441,9 +443,9 @@ Start intro(App& a) {
     if (pick == Start::none) return pick;
     a.notice.clear();
     c.orbitFile = form.file, c.startUtc = form.start, c.orbitFov = form.orbitFov, c.fov = form.fov, c.tilt = form.tilt;
-    c.azimuth = form.azimuth, c.roll = form.roll, c.gray = form.color == 1, c.earthshine = form.earthshine;
+    c.azimuth = form.azimuth, c.roll = form.roll, c.gray = form.color == 1, c.orbitMe = form.frame == 1, c.earthshine = form.earthshine;
     c.quality = form.quality ? QUALITY[form.quality - 1] : "auto";
-    saveConfig(a.cfgPath.c_str(), {{"orbit_file", c.orbitFile}, {"start_utc", c.startUtc}, {"orbit_fov", num(c.orbitFov)}, {"fov", num(c.fov)},
+    saveConfig(a.cfgPath.c_str(), {{"orbit_file", c.orbitFile}, {"start_utc", c.startUtc}, {"orbit_frame", c.orbitMe ? "ME" : "PA"}, {"orbit_fov", num(c.orbitFov)}, {"fov", num(c.fov)},
                                    {"tilt", num(c.tilt)}, {"azimuth", num(c.azimuth)}, {"roll", num(c.roll)},
                                    {"color", c.gray ? "gray" : "natural"}, {"earthshine", c.earthshine ? "1" : "0"}, {"quality", c.quality}});
     form.ready = false;

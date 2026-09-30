@@ -15,7 +15,7 @@ struct Config {
     double objScale = 1, speed = 1, orbitFov = 45, orbitGain = 4, orbitStarMag = 6.5, orbitSatScale = 1, fov = 120, tilt = 0, azimuth = 0, roll = 0;
     glm::dvec3 objRotation{0};
     glm::ivec2 sensor{1024, 1024};
-    bool gray = false, earthshine = true;
+    bool gray = false, earthshine = true, orbitMe = false;  // orbitMe: the orbit file latitude and longitude are MOON_ME, not MOON_PA
     glm::vec3 kitGain{1}, kitOffset{0};
 };
 
@@ -40,6 +40,7 @@ inline Config loadConfig(const char* path) {
         {"orbit_fov", num(c.orbitFov)}, {"orbit_gain", num(c.orbitGain)}, {"orbit_star_mag", num(c.orbitStarMag)}, {"orbit_sat_scale", num(c.orbitSatScale)}, {"sensor", vec(c.sensor)},
         {"fov", num(c.fov)}, {"tilt", num(c.tilt)}, {"azimuth", num(c.azimuth)}, {"roll", num(c.roll)},
         {"color", [&](std::istream& in) { std::string v; in >> v; c.gray = v == "gray"; }}, {"earthshine", num(c.earthshine)},
+        {"orbit_frame", [&](std::istream& in) { std::string v; in >> v; c.orbitMe = v == "ME"; }},
         {"kit_gain", vec(c.kitGain)}, {"kit_offset", vec(c.kitOffset)},
     };
     std::ifstream f(path);

@@ -21,7 +21,7 @@ inline glm::dvec2 sunAzEl(const glm::dvec3& p, const glm::dvec3& sun) {
 }
 
 struct App {
-    std::string cfgPath, orbitLoaded, notice;  // notice: shown under the start screen buttons
+    std::string cfgPath, orbitLoaded, notice;  // orbitLoaded: file and frame of the loaded orbit; notice: shown under the start screen buttons
     Config cfg;
     Orbit orbit;
     Terrain terrain;

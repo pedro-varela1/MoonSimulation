@@ -52,7 +52,7 @@ void fullscreen(GLFWwindow* w) {
     glfwSetWindowMonitor(w, nullptr, mx, my, v->width, v->height, 0);
 }
 
-// the orbit is reloaded only when its file changed, the global maps when the quality changed; streaming and sky once
+// the orbit is reloaded only when its file or frame changed, the global maps when the quality changed; streaming and sky once
 void load(App& a) {
     double shown = -1;
     auto progress = [&](const char* stage, float done) {
@@ -65,9 +65,10 @@ void load(App& a) {
         ui::present();
     };
     progress("Orbit: fit and interpolation", 0);
-    if (a.orbitLoaded != a.cfg.orbitFile) {
-        a.orbit.load(a.cfg.orbitFile, ephem::rotation("MOON_PA", "MOON_ME", 0));
-        a.orbitLoaded = a.cfg.orbitFile;
+    std::string orbit = a.cfg.orbitFile + (a.cfg.orbitMe ? " (ME)" : " (PA)");
+    if (a.orbitLoaded != orbit) {
+        a.orbit.load(a.cfg.orbitFile, a.cfg.orbitMe ? glm::dmat3(1) : ephem::rotation("MOON_PA", "MOON_ME", 0));
+        a.orbitLoaded = orbit;
     }
     a.et0 = ephem::et(a.orbit.utc0);
     a.tStart = a.t = std::clamp(ephem::et(a.cfg.startUtc) - a.et0, a.orbit.begin(), a.orbit.end());

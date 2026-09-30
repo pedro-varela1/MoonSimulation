@@ -154,7 +154,7 @@ RUN
 
 ORBIT FILES
 STK reports with the columns Time (UTCG), LatitudeMoon (deg), LongitudeMoon (deg) and AltitudeMoon (km) after the line
-of dashes, at any time step. Latitude and longitude are read as MOON_PA.
+of dashes, at any time step. Their latitude and longitude are MOON_PA or MOON_ME, as chosen on the start screen.
 
 IF IT DOES NOT START
 - "needs a graphics card with OpenGL 4.6": update the graphics driver. On laptops with two graphics cards, make sure
