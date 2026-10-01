@@ -10,13 +10,15 @@
 #include "platform.h"
 
 struct Config {
-    std::string orbitFile, spiceDir, sldemDir, polarDir, wac643, wac566, wac415, kitColor, lolaDem, hapkeDir, starCatalog, earthTexture, objFile, startUtc;
+    std::string orbitFile, spiceDir, sldemDir, polarDir, wac643, wac566, wac415, kitColor, lolaDem, hapkeDir, starCatalog, earthTexture, objFile, startUtc, craterDb, imagesEnd;
     std::string quality = "auto";
     double objScale = 1, speed = 1, orbitFov = 45, orbitGain = 4, orbitStarMag = 6.5, orbitSatScale = 1, fov = 120, tilt = 0, azimuth = 0, roll = 0;
     glm::dvec3 objRotation{0};
     glm::ivec2 sensor{1024, 1024};
     bool gray = false, earthshine = true, orbitMe = false;  // orbitMe: the orbit file latitude and longitude are MOON_ME, not MOON_PA
     glm::vec3 kitGain{1}, kitOffset{0};
+    glm::dvec2 craterDiam{5, 30};  // image generation: diameter range (km) of the labelled craters
+    bool labelConic = true;        // image generation: conic labels, or centre + radius
 };
 
 // a comment starts at a '#' that begins the line or follows a blank, so values such as paths may contain '#'
@@ -42,6 +44,8 @@ inline Config loadConfig(const char* path) {
         {"color", [&](std::istream& in) { std::string v; in >> v; c.gray = v == "gray"; }}, {"earthshine", num(c.earthshine)},
         {"orbit_frame", [&](std::istream& in) { std::string v; in >> v; c.orbitMe = v == "ME"; }},
         {"kit_gain", vec(c.kitGain)}, {"kit_offset", vec(c.kitOffset)},
+        {"crater_db", str(c.craterDb)}, {"images_end_utc", str(c.imagesEnd)}, {"crater_diameter", vec(c.craterDiam)},
+        {"label_format", [&](std::istream& in) { std::string v; in >> v; c.labelConic = v != "circle"; }},
     };
     std::ifstream f(path);
     if (!f) fatal(std::string("Could not open the configuration file ") + path);

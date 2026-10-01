@@ -23,6 +23,7 @@ class Streamer {
 public:
     GLuint tex = 0, cover = 0;
     int resident = 0, pending = 0;
+    int missing = 0;       // tiles within needKm of the path that can load but are not shown in full yet
     bool present = false;  // source files installed
     virtual ~Streamer() = default;
     void update(const glm::dvec3& center, const std::vector<glm::dvec3>& path, double needKm, bool active, double dt);

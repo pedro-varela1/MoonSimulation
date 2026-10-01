@@ -294,24 +294,33 @@ void Streamer::update(const glm::dvec3& center, const std::vector<glm::dvec3>& p
     std::vector<uint8_t> cov(size_t(WX) * WY);
     std::vector<std::pair<double, uint32_t>> order;
     double cosNeed = std::cos(needKm / MOON_R);
-    resident = 0;
+    resident = missing = 0;
     for (int ty = y0; ty < y0 + WY; ty++)
         for (int tu = x0; tu < x0 + WX; tu++) {
             int s = slotOf(tu, ty);
-            if (has(tu, ty)) {
-                bool full = true;
-                for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) full = full && has(tu + i, ty + j);
-                fade[s] = full ? std::min(fade[s] + float(dt) / 0.5f, 1.f) : 0.f;
-                cov[s] = uint8_t(fade[s] * 255);
-                resident++;
-                continue;
-            }
-            fade[s] = 0;
             uint32_t i = id(tag, global(tu), ty);
-            if (dead.count(i)) continue;
             glm::dvec3 p = tileCenter(tag, global(tu), ty);
             size_t k = 0;
             while (k < path.size() && glm::dot(p, path[k]) < cosNeed) k++;
+            bool near = k < path.size();
+            if (has(tu, ty)) {
+                bool full = true, blocked = false;  // blocked: a neighbour that never loads (no data, off the map)
+                for (int j = -1; j <= 1; j++)
+                    for (int n = -1; n <= 1; n++)
+                        if (!has(tu + n, ty + j)) {
+                            int u = tu + n, v = ty + j;
+                            full = false;
+                            blocked = blocked || v < 0 || v >= NY || (!wrap && (u < 0 || u >= NX)) || dead.count(id(tag, global(u), v));
+                        }
+                fade[s] = full ? std::min(fade[s] + float(dt) / 0.5f, 1.f) : 0.f;
+                cov[s] = uint8_t(fade[s] * 255);
+                resident++;
+                missing += near && fade[s] < 1 && !blocked;
+                continue;
+            }
+            fade[s] = 0;
+            if (dead.count(i)) continue;
+            missing += near;
             order.push_back({k * 10.0 + std::acos(std::clamp(glm::dot(p, path[0]), -1.0, 1.0)), i});
         }
     glTextureSubImage2D(cover, 0, 0, 0, WX, WY, GL_RED, GL_UNSIGNED_BYTE, cov.data());

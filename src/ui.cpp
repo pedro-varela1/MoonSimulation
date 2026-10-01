@@ -38,6 +38,10 @@ struct Form {
     double orbitFov = 45, fov = 120, tilt = 0, azimuth = 0, roll = 0, span = -1;
     int color = 0, frame = 0, quality = 0;  // frame: 0 MOON_PA, 1 MOON_ME; quality: 0 auto, then high, medium, low
     bool earthshine = true, ready = false;
+    char end[64] = "";            // image generation: last time, crater diameter range (km), labels (0 conic, 1 centre + radius)
+    double dmin = 5, dmax = 30;
+    int labels = 0;
+    bool images = false;          // the crater catalogue is installed
     std::string checked, first;
 } form;
 
@@ -351,6 +355,9 @@ Start intro(App& a) {
         form.orbitFov = c.orbitFov, form.fov = c.fov, form.tilt = c.tilt, form.azimuth = c.azimuth, form.roll = c.roll;
         form.color = c.gray, form.frame = c.orbitMe, form.earthshine = c.earthshine, form.ready = true;
         form.quality = int(std::find(QUALITY.begin(), QUALITY.end(), c.quality) - QUALITY.begin() + 1) % 4;
+        snprintf(form.end, sizeof form.end, "%s", c.imagesEnd.c_str());
+        form.dmin = c.craterDiam.x, form.dmax = c.craterDiam.y, form.labels = !c.labelConic;
+        form.images = !c.craterDb.empty() && std::filesystem::exists(c.craterDb);
         form.checked = "\1";
     }
     if (form.checked != form.file) {
@@ -412,10 +419,10 @@ Start intro(App& a) {
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
-    float bw = 320 * S, bh = 50 * S, gap = 16 * S;
-    ImGui::SetCursorPos({(size.x - 2 * bw - gap) / 2, ImGui::GetCursorPosY() + 14 * S});
+    float bw = (form.images ? 266 : 320) * S, bh = 50 * S, gap = (form.images ? 12 : 16) * S;  // three buttons stay clear of the corner logos
+    ImGui::SetCursorPos({(size.x - (form.images ? 3 : 2) * (bw + gap) + gap) / 2, ImGui::GetCursorPosY() + 14 * S});
     ImGui::BeginDisabled(!valid);
-    ImGui::PushFont(bold, 18);
+    ImGui::PushFont(bold, form.images ? 16 : 18);
     ImGui::PushStyleColor(ImGuiCol_Button, hex(ORANGE));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hex(GOLD));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, hex(GOLD));
@@ -428,10 +435,54 @@ Start intro(App& a) {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f * S);
     if (ImGui::Button("GENERATE ORBIT REPORT", {bw, bh})) pick = Start::report;
     ImGui::SetItemTooltip("Instead of simulating, save a CSV with one line per orbit file row: time, satellite, Sun and camera");
+    if (form.images) {
+        ImGui::SameLine(0, gap);
+        if (ImGui::Button("GENERATE IMAGES", {bw, bh})) {
+            if (!*form.end) snprintf(form.end, sizeof form.end, "%s", ephem::utc(e + 600).c_str());
+            ImGui::OpenPopup("images");
+        }
+        ImGui::SetItemTooltip("One camera image per orbit file row, with its JSON and crater labels, into a folder you choose");
+    }
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
     ImGui::PopFont();
     ImGui::EndDisabled();
+
+    // image generation options, then the folder (in main)
+    ImGui::SetNextWindowPos({size.x / 2, size.y / 2}, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({cw, 0});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {24 * S, 18 * S});
+    if (ImGui::BeginPopupModal("images", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
+        double ee;
+        std::string errEnd = !ephem::tryEt(form.end, ee) ? "Invalid date: use YYYY-MM-DDThh:mm:ss"
+                             : ee < e                    ? "Before the start time"
+                             : known && ee > e0 + form.span + 1e-3 ? "Outside the file: " + span : "";
+        std::string errDiam = form.dmin > 0 && form.dmin < form.dmax ? "" : "The minimum must be above 0 and below the maximum";
+        section("IMAGE GENERATION");
+        field("End (UTC)", errEnd, [&] { ImGui::InputText("##end", form.end, sizeof form.end); }, "One image per orbit file row, from the start time to this one");
+        field("Crater diameter", errDiam, [&] {
+            float w = (ImGui::GetContentRegionAvail().x - 8 * S) / 2;
+            ImGui::SetNextItemWidth(w);
+            ImGui::InputDouble("##dmin", &form.dmin, 1, 5, "min %.1f km");
+            ImGui::SameLine(0, 8 * S);
+            ImGui::SetNextItemWidth(w);
+            ImGui::InputDouble("##dmax", &form.dmax, 1, 5, "max %.1f km");
+        }, "Craters labelled in the images, all as class 0");
+        field("Labels", "", [&] { ImGui::Combo("##labels", &form.labels, "Conic: ellipse of the projected rim\0Centre + radius + DEM depth\0"); });
+        ImGui::Spacing();
+        float pw = (ImGui::GetContentRegionAvail().x - gap) / 2;
+        ImGui::BeginDisabled(!(errEnd + errDiam).empty());
+        ImGui::PushStyleColor(ImGuiCol_Button, hex(ORANGE));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hex(GOLD));
+        ImGui::PushStyleColor(ImGuiCol_Text, hex(BG));
+        if (ImGui::Button("CHOOSE FOLDER AND GENERATE", {pw, 40 * S})) pick = Start::images, ImGui::CloseCurrentPopup();
+        ImGui::PopStyleColor(3);
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, gap);
+        if (ImGui::Button("Cancel", {pw, 40 * S})) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
     if (!a.notice.empty()) {
         ImGui::SetCursorPos({(size.x - cw) / 2, ImGui::GetCursorPosY() + 10 * S});
         ImGui::PushTextWrapPos((size.x + cw) / 2);
@@ -445,20 +496,31 @@ Start intro(App& a) {
     c.orbitFile = form.file, c.startUtc = form.start, c.orbitFov = form.orbitFov, c.fov = form.fov, c.tilt = form.tilt;
     c.azimuth = form.azimuth, c.roll = form.roll, c.gray = form.color == 1, c.orbitMe = form.frame == 1, c.earthshine = form.earthshine;
     c.quality = form.quality ? QUALITY[form.quality - 1] : "auto";
+    c.imagesEnd = form.end, c.craterDiam = {form.dmin, form.dmax}, c.labelConic = form.labels == 0;
     saveConfig(a.cfgPath.c_str(), {{"orbit_file", c.orbitFile}, {"start_utc", c.startUtc}, {"orbit_frame", c.orbitMe ? "ME" : "PA"}, {"orbit_fov", num(c.orbitFov)}, {"fov", num(c.fov)},
                                    {"tilt", num(c.tilt)}, {"azimuth", num(c.azimuth)}, {"roll", num(c.roll)},
-                                   {"color", c.gray ? "gray" : "natural"}, {"earthshine", c.earthshine ? "1" : "0"}, {"quality", c.quality}});
+                                   {"color", c.gray ? "gray" : "natural"}, {"earthshine", c.earthshine ? "1" : "0"}, {"quality", c.quality},
+                                   {"images_end_utc", c.imagesEnd}, {"crater_diameter", num(c.craterDiam.x) + " " + num(c.craterDiam.y)},
+                                   {"label_format", c.labelConic ? "conic" : "circle"}});
     form.ready = false;
     return pick;
 }
 
-void progress(const char* heading, const char* stage, float done, const char* note) {
+bool progress(const char* heading, const char* stage, float done, const char* note, GLuint preview, bool cancel) {
     ImVec2 size = ImGui::GetIO().DisplaySize;
     fullWindow("progress");
     ImDrawList* dl = ImGui::GetWindowDrawList();
     backdrop(dl, size, 104 * S, 112 * S, 20 * S);
     title(dl, size.x / 2, 26 * S, 40, 0.5f);
-    float w = 620 * S, y = size.y * 0.45f;
+    float side = std::min(360 * S, size.y * 0.4f), w = 620 * S, y = preview ? 130 * S + side + 110 * S : size.y * 0.45f;
+    if (preview) {
+        GLint pw, ph;
+        glGetTextureLevelParameteriv(preview, 0, GL_TEXTURE_WIDTH, &pw);
+        glGetTextureLevelParameteriv(preview, 0, GL_TEXTURE_HEIGHT, &ph);
+        ImVec2 p(size.x / 2 - side * pw / ph / 2, 130 * S), q(p.x + side * pw / ph, p.y + side);
+        dl->AddImageRounded(tex(preview), p, q, {0, 1}, {1, 0}, IM_COL32_WHITE, 8 * S);
+        dl->AddRect(p, q, u32(LINE), 8 * S);
+    }
     ImVec2 p0((size.x - w) / 2, y), p1(p0.x + w, y + 12 * S);
     char pct[16];
     snprintf(pct, sizeof pct, "%.0f%%", done * 100);
@@ -469,7 +531,14 @@ void progress(const char* heading, const char* stage, float done, const char* no
     if (done > 0) dl->AddRectFilled(p0, {p0.x + w * std::min(done, 1.f), p1.y}, u32(GOLD), 6 * S);
     text(dl, mono, 15, {size.x / 2, y + 26 * S}, GOLD, pct, 0.5f);
     text(dl, regular, 13, {size.x / 2, y + 64 * S}, MUTED, note, 0.5f);
+    bool pressed = false;
+    if (cancel) {
+        ImGui::SetCursorPos({size.x / 2 - 80 * S, y + 96 * S});
+        pressed = ImGui::Button("Cancel", {160 * S, 36 * S});
+        ImGui::SetItemTooltip("Stop after the current image; the images already saved stay");
+    }
     ImGui::End();
+    return pressed;
 }
 
 Layout layout(glm::ivec2 size) {

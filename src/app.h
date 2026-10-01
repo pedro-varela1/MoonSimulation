@@ -12,12 +12,17 @@
 inline const std::array<const char*, 3> QUALITY{"high", "medium", "low"};
 inline const std::array<glm::dvec3, 2> VIEW0{glm::dvec3(0, 0.3, 6000), glm::dvec3(0, 0.3, 1)};  // yaw, pitch, distance: free, follow
 
-// Sun seen below the point p: azimuth clockwise from north in [0, 360) and elevation over the local horizon, degrees
-inline glm::dvec2 sunAzEl(const glm::dvec3& p, const glm::dvec3& sun) {
-    glm::dvec3 up = glm::normalize(p), s = glm::normalize(sun), east = glm::cross(glm::dvec3(0, 0, 1), up);
+// azimuth of the direction d seen at the point p: clockwise from north, degrees in [0, 360)
+inline double azimuthAt(const glm::dvec3& p, const glm::dvec3& d) {
+    glm::dvec3 up = glm::normalize(p), east = glm::cross(glm::dvec3(0, 0, 1), up);
     east = glm::length(east) > 1e-9 ? glm::normalize(east) : glm::dvec3(0, 1, 0);
-    double az = glm::degrees(std::atan2(glm::dot(s, east), glm::dot(s, glm::cross(up, east))));
-    return {az < 0 ? az + 360 : az, glm::degrees(std::asin(glm::dot(s, up)))};
+    double az = glm::degrees(std::atan2(glm::dot(d, east), glm::dot(d, glm::cross(up, east))));
+    return az < 0 ? az + 360 : az;
+}
+
+// Sun seen below the point p: azimuth clockwise from north and elevation over the local horizon, degrees
+inline glm::dvec2 sunAzEl(const glm::dvec3& p, const glm::dvec3& sun) {
+    return {azimuthAt(p, sun), glm::degrees(std::asin(glm::dot(glm::normalize(sun), glm::normalize(p))))};
 }
 
 struct App {
@@ -66,6 +71,22 @@ struct App {
         State s = orbit.at(std::clamp(time, orbit.begin(), orbit.end()));
         double r = range(s);
         return glm::normalize(r > 0 ? s.p - r * attitude(s)[2] : s.p);
+    }
+
+    // satellite, camera and sky at a time from the orbit's first row (the orbit view and the track are the caller's)
+    Scene scene(double time) const {
+        State st = orbit.at(time);
+        Scene s;
+        double et = et0 + time, tx = std::tan(glm::radians(cfg.fov) / 2);
+        s.att = attitude(st);
+        s.cam = {st.p, s.att[0], s.att[1], -s.att[2], tx, tx * cfg.sensor.y / cfg.sensor.x};
+        s.sat = st.p;
+        s.sun = ephem::sun(et);
+        s.earth = ephem::earth(et);
+        s.j2000ToMe = ephem::rotation("J2000", "MOON_ME", et);
+        s.earthToMe = ephem::rotation("IAU_EARTH", "MOON_ME", et);
+        s.planets = ephem::planets(et);
+        return s;
     }
 
     Camera orbitCamera(const State& s, glm::ivec2 fb) const {

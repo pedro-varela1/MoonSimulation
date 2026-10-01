@@ -59,7 +59,7 @@ if ($cfg.obj_file) {
 $dlls = & "$Msys\usr\bin\ldd.exe" MoonSimulation.exe | Select-String '/ucrt64/bin/(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
 foreach ($d in $dlls) { Copy-Item "$Msys\ucrt64\bin\$d" $stage }
 Copy-Item third_party\imgui\LICENSE.txt "$stage\licenses\imgui.txt"
-foreach ($p in 'gcc-libs', 'glew', 'glfw', 'jbigkit', 'lerc', 'libdeflate', 'libjpeg-turbo', 'libtiff', 'libwebp', 'libwinpthread', 'xz', 'zlib', 'zstd') {
+foreach ($p in 'gcc-libs', 'glew', 'glfw', 'jbigkit', 'lerc', 'libdeflate', 'libjpeg-turbo', 'libpng', 'libtiff', 'libwebp', 'libwinpthread', 'xz', 'zlib', 'zstd') {
     Copy-Item "$Msys\ucrt64\share\licenses\$p" "$stage\licenses\$p" -Recurse
 }
 
@@ -69,7 +69,7 @@ $installed = @{
     polar_dir = 'data/lola_polar'; wac_643 = 'data/wac/643'; wac_566 = 'data/wac/566'; wac_415 = 'data/wac/415'; hapke_dir = 'data/hapke'
     kit_color = 'data/global/' + (Split-Path (Source kit_color) -Leaf); lola_dem = 'data/global/' + (Split-Path (Source lola_dem) -Leaf)
     star_catalog = 'data/stars/' + (Split-Path (Source star_catalog) -Leaf); earth_texture = 'data/earth/' + (Split-Path (Source earth_texture) -Leaf)
-    quality = 'auto'
+    crater_db = 'data/craters/' + (Split-Path (Source crater_db) -Leaf); quality = 'auto'
 }
 if ($cfg.obj_file) { $installed.obj_file = 'data/model/' + (Split-Path (Source obj_file) -Leaf) }
 $lines = [IO.File]::ReadAllLines("$root\config.ini", [Text.Encoding]::UTF8) | ForEach-Object {
@@ -85,6 +85,7 @@ $setup = "SelenITA-Setup-$version" + $(if ($Compact) { '-Compact' } else { '' })
 $ita = "Instituto Tecnol$([char]0xF3)gico de Aeron$([char]0xE1)utica (ITA)"
 if ($Compact) {
     $variant = 'compact installer'
+    $images = ''
     $about = @'
 This is the compact installer (about 5.5 GB installed). It leaves out the high-resolution terrain (SLDEM2015 and LOLA
 polar, about 38 GB): the camera view uses the global LOLA terrain (about 470 m per pixel), and the telemetry lists the
@@ -103,7 +104,14 @@ high-resolution terrain as not installed. Running the full installer later over 
     $about = @'
 This is the full installer. Its Full installation (about 44 GB) includes the high-resolution terrain of the camera view:
 SLDEM2015 512 ppd (about 59 m per pixel) up to 60 degrees of latitude and LOLA 60 m above. The Compact installation
-(about 5.5 GB) leaves it out and uses the global LOLA terrain (about 470 m per pixel); Custom picks the parts.
+(about 5.5 GB) leaves it out and uses the global LOLA terrain (about 470 m per pixel); Custom picks the parts. The
+Full installation also brings the Robbins (2018) crater catalogue, which enables the GENERATE IMAGES button.
+'@
+    $images = @'
+
+   - GENERATE IMAGES saves one camera image per orbit file row, from the start time to a chosen end time, into the
+     img, json and label subfolders of a chosen folder: the PNG as the camera shows it, a JSON with the camera (and
+     its exposure), the Sun and the Earth, and the labels of the catalogue craters in view (class 0, conic or centre + radius).
 '@
     $disk = 'about 44 GB for the Full installation, about 5.5 GB for the Compact one'
     $pages = 'choose the folder, the installation type (Full, Compact or Custom) and whether to create a desktop shortcut'
@@ -143,6 +151,7 @@ RUN
    - Set the orbit view FOV, the camera FOV, tilt, azimuth and roll, the color mode, earthshine and the quality
      (Auto chooses it from the video memory).
    - START SIMULATION is enabled once every field is valid.
+   - GENERATE ORBIT REPORT instead saves a CSV with one line per orbit file row: time, satellite, Sun and camera.$images
 2. After loading (up to about a minute the first time), the simulation fills the screen:
    - Orbit view (left): drag to rotate, scroll to zoom. Its boxes mark the poles, show the Moon axes and the camera
      field of view; the Satellite slider enlarges the satellite.
@@ -198,7 +207,7 @@ The bundled third-party libraries keep their own licenses, in the licenses folde
 $defines = @("/DStage=$stage", "/DOutputDir=$output", "/DSpiceDir=$(Source spice_dir)", "/DStarCatalog=$(Source star_catalog)",
     "/DEarthTexture=$(Source earth_texture)", "/DLolaDem=$(Source lola_dem)", "/DKitColor=$(Source kit_color)", "/DHapkeDir=$(Source hapke_dir)",
     "/DWac643=$(Source wac_643)", "/DWac566=$(Source wac_566)", "/DWac415=$(Source wac_415)")
-$defines += if ($Compact) { '/DCompact', "/DDownloadUrl=$DownloadUrl" } else { "/DSldemDir=$(Source sldem_dir)", "/DPolarDir=$(Source polar_dir)" }
+$defines += if ($Compact) { '/DCompact', "/DDownloadUrl=$DownloadUrl" } else { "/DSldemDir=$(Source sldem_dir)", "/DPolarDir=$(Source polar_dir)", "/DCraterDb=$(Source crater_db)" }
 & $Iscc @defines "$PSScriptRoot\selenita.iss"
 if ($LASTEXITCODE) { throw 'installer compilation failed' }
 Copy-Item "$stage\README.txt", "$stage\LICENSE.txt" $output

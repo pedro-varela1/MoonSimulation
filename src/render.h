@@ -18,6 +18,7 @@ struct Scene {
     double dt = 0;
     float satScale = 1;    // satellite drawn at this many times its real size in the orbit view
     bool showFov = false;  // camera field of view drawn in the orbit view
+    bool cameraOnly = false;  // image generation: no orbit view
 };
 
 // quality from the video memory the driver reports (NVIDIA dedicated, AMD free): 0 high, 1 medium, 2 low (integrated or unknown)
@@ -35,6 +36,10 @@ public:
     void draw(const Scene& s, glm::ivec2 orbitSize);  // orbit view and camera image, both sRGB RGBA8 textures
     // many points at once, with the global terrain only (not the streamed windows); positions and Sun positions in MOON_ME, km
     std::vector<Probe> probeAll(const std::vector<glm::dvec3>& pos, const std::vector<glm::dvec3>& sun);
+    // terrain height (km) at unit vectors (MOON_ME) with the terrain of the last frame and, if sun, the Sun's visible fraction there
+    std::vector<glm::vec2> sample(const std::vector<glm::vec3>& n, bool sun);
+    float exposure();                   // EV of the last camera image, once the GPU is done with it
+    std::vector<uint8_t> cameraPixels();  // last camera image as shown: sRGB RGB rows, bottom row first
     GLuint orbitImage() const { return viewColor; }
     GLuint cameraImage() const { return camView; }
 
@@ -42,7 +47,7 @@ private:
     const Config* cfg = nullptr;
     const Terrain* terrain = nullptr;
     const Streamer *sldem = nullptr, *polar = nullptr;
-    GLuint moon = 0, sky = 0, show = 0, overlay = 0, hist = 0, resolve = 0, probe = 0, vao = 0;
+    GLuint moon = 0, sky = 0, show = 0, overlay = 0, hist = 0, resolve = 0, probe = 0, sampler = 0, vao = 0;
     GLuint frameUbo = 0, camUbo = 0, viewUbo = 0, probeBuf = 0, probeIn = 0, expBuf = 0, trackBuf = 0, fovBuf = 0, meshBuf = 0, skyBuf = 0;
     GLuint camTex = 0, camDepth = 0, camFbo = 0, camView = 0, camViewFbo = 0, viewColor = 0, viewDepth = 0, viewFbo = 0, capH = 0, capA = 0;
     const float *probeMap = nullptr, *expMap = nullptr;
@@ -50,4 +55,6 @@ private:
     int meshVerts = 0, stars = 0;
     void loadObj(const std::string& path);
     void bindData();  // terrain textures and frame uniforms
+    void moonAndSky();
+    void drawOrbit(const Scene& s, glm::ivec2 fb);
 };

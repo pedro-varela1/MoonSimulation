@@ -2,6 +2,7 @@
 #include <filesystem>
 #include "app.h"
 #include "ephem.h"
+#include "imagegen.h"
 #include "platform.h"
 #include "report.h"
 #include "ui.h"
@@ -109,6 +110,26 @@ void report(App& a) {
     a.notice = ok ? "Report saved: " + path + " (" + std::to_string(rows) + " rows)" : "Could not write the report to " + path;
 }
 
+// camera images of the orbit rows from the start to images_end_utc, with their JSON and crater labels, in a folder the user picks
+void images(App& a) {
+    std::string folder = folderDialog(a.win);
+    if (folder.empty()) return;
+    load(a);
+    bool stop = false;
+    std::string error;
+    int n = generateImages(a, folder, error, [&](size_t done, size_t total, const char* stage) {
+        glfwPollEvents();
+        if (glfwWindowShouldClose(a.win)) exit(0);
+        char text[160];
+        snprintf(text, sizeof text, "%zu of %zu images%s%s", done, total, *stage ? "  ·  " : "", stage);
+        ui::frame();
+        stop = ui::progress("Generating images", text, total ? float(done) / total : 0, folder.c_str(), done ? a.renderer.cameraImage() : 0, true) || stop;
+        ui::present();
+        return !stop;
+    });
+    a.notice = n < 0 ? error : std::string(stop ? "Stopped after " : "Saved ") + std::to_string(n) + (n == 1 ? " image in " : " images in ") + folder;
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -154,6 +175,7 @@ int main(int argc, char** argv) {
             ui::Start start = ui::intro(a);
             ui::present();
             if (start == ui::Start::report) report(a);
+            if (start == ui::Start::images) images(a);
             if (start == ui::Start::simulate) {
                 load(a);
                 fullscreen(a.win);
@@ -171,18 +193,8 @@ int main(int argc, char** argv) {
         ui::Layout L = ui::layout(size);
         glm::ivec2 orbitSize = glm::max(glm::ivec2(L.orbit.z, L.orbit.w) / (a.terrain.level > 1 ? 2 : 1), glm::ivec2(1));  // low quality: half resolution
 
-        State st = a.orbit.at(a.t);
-        Scene s;
-        s.att = a.attitude(st);
-        double tx = std::tan(glm::radians(a.cfg.fov) / 2), et = a.et0 + a.t;
-        s.cam = {st.p, s.att[0], s.att[1], -s.att[2], tx, tx * a.cfg.sensor.y / a.cfg.sensor.x};
-        s.view = a.orbitCamera(st, orbitSize);
-        s.sat = st.p;
-        s.sun = ephem::sun(et);
-        s.earth = ephem::earth(et);
-        s.j2000ToMe = ephem::rotation("J2000", "MOON_ME", et);
-        s.earthToMe = ephem::rotation("IAU_EARTH", "MOON_ME", et);
-        s.planets = ephem::planets(et);
+        Scene s = a.scene(a.t);
+        s.view = a.orbitCamera(a.orbit.at(a.t), orbitSize);
         s.dt = dt;
         s.satScale = a.satScale;
         s.showFov = a.fov;
@@ -196,7 +208,7 @@ int main(int argc, char** argv) {
         };
         std::vector<glm::dvec3> path(64);
         for (int k = 0; k < 64; k++) path[k] = a.focus(a.t + 4.5 * k);
-        double needKm = std::min(0.67 * a.cfg.sensor.x / (2 * tx), 250.0);
+        double needKm = std::min(0.67 * a.cfg.sensor.x / (2 * s.cam.tanX), 250.0);
         a.sldem->update(ahead(false), path, needKm, a.speed <= 150, dt);
         a.polar->update(ahead(true), path, needKm, a.speed <= 150, dt);
         a.renderer.draw(s, orbitSize);

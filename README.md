@@ -25,6 +25,26 @@ The start time is checked against the file's range. The buttons work only when e
 | `camera_tilt_deg`, `camera_azimuth_deg`, `camera_roll_deg` | Camera pointing from the start screen |
 | `center_gsd_m` | Ground sample distance at the image center (empty when the boresight misses the Moon) |
 
+**GENERATE IMAGES** appears when the crater catalogue (`crater_db`) is installed: with the full installer, or `assets/lunar_crater_database_robbins_2018.csv` in a build. It asks for the end time, the crater diameter range and the label format, then for a folder. For every orbit file row from the start to the end time it waits for the high-resolution terrain under the camera, renders the camera image with the exposure converged on it, and writes three files named `hh_mm_ss-YYYYMMDD`, like linna-imagegenerator:
+
+| File | Content |
+| --- | --- |
+| `img/<stem>.png` | The camera image as shown, 8-bit sRGB, at the sensor size |
+| `json/<stem>.json` | `camera`: `lat_deg`, `lon_deg` (0–360, MOON_ME), `height_km`, `fov_deg`, `tilt_deg`, `azimuth_deg`, `roll_deg` (as on the start screen), `heading_deg` (flight direction, clockwise from north) and `ev` (auto-exposure). `sun`: `azimuth_deg` (clockwise from north), `azimuth_rel_deg` (from the flight direction) and `elevation_deg`, below the satellite. `earth`: the same three seen from the ground below the satellite (negative elevation below the horizon), plus `distance_km`, `angle_deg` (angular diameter) and `illuminated_fraction` (its lit fraction seen from the Moon) |
+| `label/<stem>.txt` | One line per Robbins (2018) crater in view with a diameter in the range, always class 0 |
+
+The labels follow linna-imagegenerator's `build_labels.py`, computed with the simulator's camera:
+- **Conic**: `0 xc yc a b theta_deg r_km depth_km rim_elev_km vis_frac shadow_frac offnadir_deg`.
+  - The catalogue's rim ellipse is projected exactly, as the conic through the homography of its plane. linna fits an ellipse to 64 projected rim points, which gives the same conic.
+  - `xc`, `yc` are divided by the image size and `a`, `b` by its larger side; `theta_deg` runs from +x toward +y.
+  - A crater is kept when some of its rim is inside the image, the whole rim is in front of the camera, and its centre is on the visible side.
+  - `vis_frac` is the fraction of the rim inside the image, and `shadow_frac` the fraction of those rim points in shadow.
+- **Centre + radius**: `0 x_norm y_norm r_norm r_px r_km depth_km rim_elev_km`, for centres inside the image. `r_px = r_km · f / distance along the boresight`, and `r_norm = r_px / max(W, H)`.
+
+Both formats put each centre at its rim height, the median of the terrain on the crater circle. `depth_km` and `rim_elev_km` follow linna's `measure_depth`: the 85th percentile of the terrain in the 0.8–1.2 R annulus, minus the 15th percentile within 0.35 R. All of it is measured on the SLDEM loaded for the image. The heights are above the 1737.4 km sphere, as the simulator draws the terrain, not relative to a patch mid-height as in linna's Blender scene.
+
+An image takes about 0.5 s when the rows are 1 s apart, and about 2 s when each one needs new terrain (rows ~40 s apart), at 1024 × 1024. Cancel stops after the current image.
+
 The simulation then fills the whole monitor the window was on, in one screen:
 
 - **Orbit** (large, left, interactive) – the Moon lit by the real Sun, the CubeSat (OBJ model, or a marker), and
@@ -46,13 +66,13 @@ Both skies show the Hipparcos stars, the planets from Mercury to Saturn, the Ear
 its phase and atmosphere) and the Sun. The camera is physical. The orbit view is illustrative: its stars are
 scaled to stay visible, and the Sun has a glow.
 
-Both views use the same per-pixel ray caster. Nothing is written to disk except the start-screen values in `config.ini`.
+Both views use the same per-pixel ray caster. The simulation writes nothing to disk except the start-screen values in `config.ini`; the report and the image generation write where the user picks.
 
 ## Requirements
 
 - [MSYS2](https://www.msys2.org/) UCRT64:
   ```sh
-  pacman -S mingw-w64-ucrt-x86_64-{gcc,make,glfw,glm,glew,libtiff}
+  pacman -S mingw-w64-ucrt-x86_64-{gcc,make,glfw,glm,glew,libtiff,libpng}
   ```
 - **CSPICE**: download [cspice.zip](https://naif.jpl.nasa.gov/pub/naif/toolkit//C/PC_Windows_VisualC_64bit/packages/cspice.zip)
   and extract only `cspice/include` and `cspice/src/cspice` into `third_party/cspice/`.
@@ -60,6 +80,7 @@ Both views use the same per-pixel ray caster. Nothing is written to disk except 
 - **Hapke parameter maps** (Sato et al. 2014), into `assets/hapke/`:
   `WAC_HAPKEPARAMMAP_{643NM,566NM,415NM}.IMG` from the
   [LROC PDS](https://pds.mcp.nasa.gov/data/store/img/lunar_reconnaissance_orbiter/pds4/lroc/lro-l-lroc-5-rdr/LROLRC_2001/DATA/SDP/WAC_HAPKEPARAMMAP/).
+- **Crater catalogue** (optional, for GENERATE IMAGES): the Robbins (2018) CSV as `assets/lunar_crater_database_robbins_2018.csv`.
 - **Interface**, all compiled into the executable:
   - [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b (MIT) in `third_party/imgui/`: the core, plus the GLFW and OpenGL 3 backends;
   - [`stb_image.h`](https://github.com/nothings/stb) in `third_party/`.
@@ -143,7 +164,7 @@ The installer takes only the files the simulator reads, straight from the paths 
 The output is `D:\LINNA\installer\output\SelenITA-Setup-1.0.0.exe` plus 2 GB `.bin` slices, which must stay next to the `.exe`. The installer:
 - shows the MIT License, which must be accepted to continue;
 - installs per user, with no administrator rights, into a folder of the user's choice;
-- offers Full (~43 GB) or Compact (~5 GB, without SLDEM and the polar DEM);
+- offers Full (~43 GB) or Compact (~5 GB, without SLDEM and the polar DEM); Full also installs the crater catalogue (component `craters`, 238 MB), which enables GENERATE IMAGES, and the compact installer never carries it;
 - adds a Start menu entry and an optional desktop shortcut, and registers an uninstaller;
 - on reinstall, keeps the user's `config.ini`.
 
@@ -173,6 +194,8 @@ A `#` starts a comment only at the beginning of a line or after a blank, so path
 | `color` | `natural` (643/566/415 nm) or `gray` (643 nm), in both views |
 | `earthshine` | `1` lights the night side with earthshine, `0` turns it off |
 | `kit_gain`, `kit_offset` | Maps the kit's polar caps to I/F per band (fit on 65–70°) |
+| `crater_db` | Robbins (2018) crater catalogue CSV; the GENERATE IMAGES button appears only when it exists |
+| `images_end_utc`, `crater_diameter`, `label_format` | Image generation: last row time (empty = start + 10 min), diameter range of the labelled craters (km), `conic` or `circle` labels |
 
 ## Controls
 

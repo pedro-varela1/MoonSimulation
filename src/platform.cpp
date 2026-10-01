@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commdlg.h>
+#include <shobjidl.h>
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
@@ -13,6 +14,15 @@ std::wstring wide(const std::string& s) {
     std::wstring w(MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), int(w.size()));
     return w;
+}
+
+// UTF-8 with forward slashes
+std::string narrow(const wchar_t* w) {
+    std::string s(WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), int(s.size()), nullptr, nullptr);
+    s.pop_back();
+    std::replace(s.begin(), s.end(), '\\', '/');
+    return s;
 }
 
 // Windows open dialog, or save dialog when ext is set; UTF-8 with forward slashes, empty when cancelled
@@ -29,12 +39,7 @@ std::string fileDialog(GLFWwindow* owner, const std::string& current, const wcha
     o.lpstrFile = file;
     o.nMaxFile = 1024;
     o.Flags = OFN_NOCHANGEDIR | (ext ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
-    if (!(ext ? GetSaveFileNameW(&o) : GetOpenFileNameW(&o))) return "";
-    char out[4096];
-    WideCharToMultiByte(CP_UTF8, 0, file, -1, out, sizeof out, nullptr, nullptr);
-    std::string s = out;
-    std::replace(s.begin(), s.end(), '\\', '/');
-    return s;
+    return (ext ? GetSaveFileNameW(&o) : GetOpenFileNameW(&o)) ? narrow(file) : "";
 }
 
 }
@@ -60,3 +65,23 @@ std::string openFileDialog(GLFWwindow* owner, const std::string& current) {
 std::string saveFileDialog(GLFWwindow* owner, const std::string& suggested) {
     return fileDialog(owner, suggested, L"CSV table (*.csv)\0*.csv\0All files\0*.*\0", L"csv");
 }
+
+std::string folderDialog(GLFWwindow* owner) {
+    std::string out;
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    IFileOpenDialog* d = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&d)))) return out;
+    DWORD o;
+    d->GetOptions(&o);
+    d->SetOptions(o | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+    IShellItem* item;
+    if (SUCCEEDED(d->Show(glfwGetWin32Window(owner))) && SUCCEEDED(d->GetResult(&item))) {
+        PWSTR path;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) out = narrow(path), CoTaskMemFree(path);
+        item->Release();
+    }
+    d->Release();
+    return out;
+}
+
+FILE* openFile(const std::string& path, const wchar_t* mode) { return _wfopen(wide(path).c_str(), mode); }

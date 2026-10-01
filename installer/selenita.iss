@@ -50,6 +50,7 @@ Name: "custom"; Description: "Custom installation"; Flags: iscustom
 Name: "core"; Description: "Simulator, global terrain and color, sky and the SelenITA orbits"; Types: full compact custom; Flags: fixed
 Name: "sldem"; Description: "High-resolution terrain: SLDEM2015 512 ppd, latitudes up to 60 degrees"; Types: full
 Name: "polar"; Description: "High-resolution polar terrain: LOLA 60 m, latitudes above 60 degrees"; Types: full
+Name: "craters"; Description: "Image generation: Robbins (2018) crater catalogue for the crater labels"; Types: full
 #endif
 
 [Tasks]
@@ -74,6 +75,7 @@ Source: "{#Wac415}\WAC_HAPKE_415NM_E350*.IMG"; DestDir: "{app}\data\wac\415"{#Co
 Source: "{#SldemDir}\sldem2015_512_*_float.tif"; DestDir: "{app}\data\sldem512"; Flags: nocompression; Components: sldem
 Source: "{#PolarDir}\ldem_60n_60m.img"; DestDir: "{app}\data\lola_polar"; Components: polar
 Source: "{#PolarDir}\ldem_60s_60m.img"; DestDir: "{app}\data\lola_polar"; Components: polar
+Source: "{#CraterDb}"; DestDir: "{app}\data\craters"; Components: craters
 #endif
 
 [Icons]

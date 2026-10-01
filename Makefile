@@ -4,7 +4,7 @@ CXX := g++
 CS := third_party/cspice
 CSDEF := -std=gnu99 -fpermissive -w -DMSDOS -DOMIT_BLANK_CC -D_COMPLEX_DEFINED -I$(CS)/include
 CXXFLAGS := -std=c++20 -O2 -Wall -MMD -isystem third_party -isystem $(CS)/include
-LDLIBS := -lglfw3 -lglew32 -lopengl32 -ltiff -lz -lcomdlg32
+LDLIBS := -lglfw3 -lglew32 -lopengl32 -ltiff -lpng -lz -lcomdlg32 -lole32 -luuid
 SUBSYSTEM ?= -mwindows
 APP := $(patsubst src/%.cpp,build/%.o,$(wildcard src/*.cpp))
 GUI := $(patsubst third_party/imgui/%.cpp,build/imgui/%.o,$(wildcard third_party/imgui/*.cpp))

@@ -10,7 +10,7 @@ namespace {
 
 struct FrameUBO { glm::vec4 sunDir, earthDir, light, sldemWin, polarWin; glm::mat3x4 earthToMe; };
 struct ViewUBO { glm::vec4 eye, right, up, fwd, size; };
-constexpr double PI = 3.14159265358979, RSUN = 695700, REARTH = 6371, ZNEAR = 1e-5, VSUN = -26.74;
+constexpr double PI = 3.14159265358979, ZNEAR = 1e-5, VSUN = -26.74;
 constexpr double STAR_PEAK = 0.009;  // orbit window: linear display value of a star at orbit_star_mag (sRGB ~24/255)
 constexpr int FOV_N = 16;  // orbit window: camera field of view grid, cells per image side
 
@@ -79,6 +79,7 @@ void Renderer::init(const Config& c, const Terrain& t, const Streamer& s, const 
     hist = program({{GL_COMPUTE_SHADER, "exposure.comp"}}, "#define STAGE 0\n");
     resolve = program({{GL_COMPUTE_SHADER, "exposure.comp"}}, "#define STAGE 1\n");
     probe = program({{GL_COMPUTE_SHADER, "probe.comp"}});
+    sampler = program({{GL_COMPUTE_SHADER, "sample.comp"}});
     glCreateVertexArrays(1, &vao);
     frameUbo = buffer(sizeof(FrameUBO), nullptr, GL_DYNAMIC_STORAGE_BIT);
     camUbo = buffer(sizeof(ViewUBO), nullptr, GL_DYNAMIC_STORAGE_BIT);
@@ -181,8 +182,8 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glm::dvec3 SE = s.sun - s.earth;
     double dS = glm::length(s.sun), dE = glm::length(s.earth);
     double a = std::acos(glm::clamp(glm::dot(SE / glm::length(SE), -s.earth / dE), -1.0, 1.0));
-    double kE = cfg->earthshine * 2.0 / 3 * 0.306 * std::pow(REARTH / dE, 2) * (std::sin(a) + (PI - a) * std::cos(a)) / PI * std::pow(dS / glm::length(SE), 2);
-    FrameUBO f{glm::vec4(glm::vec3(s.sun / dS), std::asin(RSUN / dS)), glm::vec4(glm::vec3(s.earth / dE), std::asin(REARTH / dE)),
+    double kE = cfg->earthshine * 2.0 / 3 * 0.306 * std::pow(EARTH_R / dE, 2) * (std::sin(a) + (PI - a) * std::cos(a)) / PI * std::pow(dS / glm::length(SE), 2);
+    FrameUBO f{glm::vec4(glm::vec3(s.sun / dS), std::asin(SUN_R / dS)), glm::vec4(glm::vec3(s.earth / dE), std::asin(EARTH_R / dE)),
                glm::vec4(std::pow(AU / dS, 2), kE, std::tan(glm::radians(23.657)), cfg->gray),
                sldem->window(), polar->window(), glm::mat3x4(glm::mat3(s.earthToMe))};
     double starScale = STAR_PEAK / (cfg->orbitGain * PI * std::pow(10, -0.4 * (cfg->orbitStarMag - VSUN)));
@@ -200,19 +201,6 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, expBuf);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, skyBuf);
     glBindVertexArray(vao);
-    auto drawMoonAndSky = [&] {
-        glDepthFunc(GL_ALWAYS);
-        glUseProgram(moon);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        glDepthFunc(GL_GEQUAL);
-        glDepthMask(GL_FALSE);
-        glEnable(GL_BLEND);
-        glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
-        glUseProgram(sky);
-        glDrawArrays(GL_POINTS, 0, stars + 5);
-        glDisable(GL_BLEND);
-        glDepthMask(GL_TRUE);
-    };
 
     glm::vec4 at[2] = {glm::vec4(glm::vec3(s.sat), 0), f.sunDir};
     glNamedBufferSubData(probeIn, 0, sizeof at, at);
@@ -225,7 +213,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glViewport(0, 0, cfg->sensor.x, cfg->sensor.y);
     glEnable(GL_DEPTH_TEST);
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, camUbo);
-    drawMoonAndSky();
+    moonAndSky();
 
     glUseProgram(hist);
     glDispatchCompute((cfg->sensor.x + 15) / 16, (cfg->sensor.y + 15) / 16, 1);
@@ -239,8 +227,29 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glUseProgram(show);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glGenerateTextureMipmap(camView);
-    glEnable(GL_DEPTH_TEST);
+    if (!s.cameraOnly) drawOrbit(s, fb);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    probed = {probeMap[0], probeMap[1], glm::vec3(probeMap[2], probeMap[3], probeMap[4])};
+    ev = expMap[128];
+}
 
+void Renderer::moonAndSky() {
+    glDepthFunc(GL_ALWAYS);
+    glUseProgram(moon);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDepthFunc(GL_GEQUAL);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
+    glUseProgram(sky);
+    glDrawArrays(GL_POINTS, 0, stars + 5);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+}
+
+// orbit view: Moon and sky, track, camera field of view and the satellite
+void Renderer::drawOrbit(const Scene& s, glm::ivec2 fb) {
+    glEnable(GL_DEPTH_TEST);
     if (fb != viewSize) {
         glDeleteTextures(1, &viewColor);
         glDeleteTextures(1, &viewDepth);
@@ -255,7 +264,7 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
     glBindFramebuffer(GL_FRAMEBUFFER, viewFbo);
     glViewport(0, 0, fb.x, fb.y);
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, viewUbo);
-    drawMoonAndSky();
+    moonAndSky();
 
     glDepthFunc(GL_GREATER);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
@@ -321,9 +330,6 @@ void Renderer::draw(const Scene& s, glm::ivec2 fb) {
         glDrawArrays(GL_POINTS, 0, 1);
     }
     glDisable(GL_DEPTH_TEST);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    probed = {probeMap[0], probeMap[1], glm::vec3(probeMap[2], probeMap[3], probeMap[4])};
-    ev = expMap[128];
 }
 
 void Renderer::bindData() {
@@ -348,7 +354,7 @@ std::vector<Probe> Renderer::probeAll(const std::vector<glm::dvec3>& pos, const 
         for (size_t i = 0; i < n; i++) {
             double d = glm::length(sun[i0 + i]);
             in[2 * i] = glm::vec4(glm::vec3(pos[i0 + i]), 0);
-            in[2 * i + 1] = glm::vec4(glm::vec3(sun[i0 + i] / d), std::asin(RSUN / d));
+            in[2 * i + 1] = glm::vec4(glm::vec3(sun[i0 + i] / d), std::asin(SUN_R / d));
         }
         glNamedBufferSubData(inBuf, 0, sizeof(glm::vec4) * 2 * n, in.data());
         glUniform1ui(0, GLuint(n));
@@ -359,4 +365,40 @@ std::vector<Probe> Renderer::probeAll(const std::vector<glm::dvec3>& pos, const 
     glDeleteBuffers(1, &inBuf);
     glDeleteBuffers(1, &outBuf);
     return out;
+}
+
+std::vector<glm::vec2> Renderer::sample(const std::vector<glm::vec3>& n, bool sun) {
+    constexpr size_t CHUNK = 1 << 16;
+    std::vector<glm::vec2> out(n.size());
+    std::vector<glm::vec4> in(CHUNK);
+    GLuint inBuf = buffer(sizeof(glm::vec4) * CHUNK, nullptr, GL_DYNAMIC_STORAGE_BIT), outBuf = buffer(sizeof(glm::vec2) * CHUNK, nullptr, 0);
+    bindData();
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, outBuf);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, inBuf);
+    glUseProgram(sampler);
+    glUniform1i(1, sun);
+    for (size_t i0 = 0; i0 < n.size(); i0 += CHUNK) {
+        size_t k = std::min(CHUNK, n.size() - i0);
+        for (size_t i = 0; i < k; i++) in[i] = glm::vec4(n[i0 + i], 0);
+        glNamedBufferSubData(inBuf, 0, sizeof(glm::vec4) * k, in.data());
+        glUniform1ui(0, GLuint(k));
+        glDispatchCompute(GLuint((k + 63) / 64), 1, 1);
+        glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+        glGetNamedBufferSubData(outBuf, 0, sizeof(glm::vec2) * k, &out[i0]);
+    }
+    glDeleteBuffers(1, &inBuf);
+    glDeleteBuffers(1, &outBuf);
+    return out;
+}
+
+float Renderer::exposure() {
+    glFinish();
+    return ev = expMap[128];
+}
+
+std::vector<uint8_t> Renderer::cameraPixels() {
+    std::vector<uint8_t> px(size_t(cfg->sensor.x) * cfg->sensor.y * 3);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glGetTextureImage(camView, 0, GL_RGB, GL_UNSIGNED_BYTE, GLsizei(px.size()), px.data());
+    return px;
 }
