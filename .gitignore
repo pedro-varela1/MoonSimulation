@@ -3,3 +3,4 @@ build/
 third_party/cspice/
 assets/
 tmp.Fa*
+python_scripts/outputs/*.csv
