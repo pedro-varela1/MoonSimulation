@@ -267,6 +267,7 @@ void Streamer::update(const glm::dvec3& center, const std::vector<glm::dvec3>& p
     if (place(center, cx, cy, ct)) {
         int dx = wrap ? ((cx - x0) % NX + NX * 3 / 2) % NX - NX / 2 : cx - x0;
         if (!placed || ct != tag || std::abs(x0 + dx) > 2 * NX) { x0 = cx; y0 = cy; tag = ct; placed = true; std::fill(slot.begin(), slot.end(), -1); }
+        else if (snap) { x0 = cx; y0 = cy; }  // never unwrapped past 360 degrees: the shader's float coordinates depend on the request alone
         else if (std::abs(dx) > 4 || std::abs(cy - y0) > 4) { x0 += dx; y0 = cy; }
     }
     active = on && placed;
@@ -304,13 +305,14 @@ void Streamer::update(const glm::dvec3& center, const std::vector<glm::dvec3>& p
             while (k < path.size() && glm::dot(p, path[k]) < cosNeed) k++;
             bool near = k < path.size();
             if (has(tu, ty)) {
-                bool full = true, blocked = false;  // blocked: a neighbour that never loads (no data, off the map)
+                bool full = true, blocked = false;  // blocked: a neighbour that never loads (no data, off the map, off the window)
                 for (int j = -1; j <= 1; j++)
                     for (int n = -1; n <= 1; n++)
                         if (!has(tu + n, ty + j)) {
                             int u = tu + n, v = ty + j;
                             full = false;
-                            blocked = blocked || v < 0 || v >= NY || (!wrap && (u < 0 || u >= NX)) || dead.count(id(tag, global(u), v));
+                            blocked = blocked || v < 0 || v >= NY || (!wrap && (u < 0 || u >= NX)) || u < x0 || u >= x0 + WX || v < y0 || v >= y0 + WY ||
+                                      dead.count(id(tag, global(u), v));
                         }
                 fade[s] = full ? std::min(fade[s] + float(dt) / 0.5f, 1.f) : 0.f;
                 cov[s] = uint8_t(fade[s] * 255);

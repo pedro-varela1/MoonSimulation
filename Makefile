@@ -10,12 +10,21 @@ APP := $(patsubst src/%.cpp,build/%.o,$(wildcard src/*.cpp))
 GUI := $(patsubst third_party/imgui/%.cpp,build/imgui/%.o,$(wildcard third_party/imgui/*.cpp))
 CSO := $(patsubst $(CS)/src/cspice/%.c,build/cspice/%.o,$(wildcard $(CS)/src/cspice/*.c))
 
+LINNA := $(patsubst linna2/%.cpp,build/linna2/%.o,$(wildcard linna2/*.cpp))
+
 # SUBSYSTEM= (empty) builds a console executable for debugging
 MoonSimulation.exe: $(APP) $(GUI) build/app.res build/libcspice.a
 	$(CXX) $(SUBSYSTEM) -o $@ $^ $(LDLIBS)
 
+# LINNA-2 dataset generator (console): the simulator's code without its window and UI
+linna2/linna2.exe: $(LINNA) $(filter-out build/main.o build/ui.o,$(APP)) build/libcspice.a
+	$(CXX) -o $@ $^ $(LDLIBS) -lbcrypt
+
 build/%.o: src/%.cpp | build
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+build/linna2/%.o: linna2/%.cpp | build/linna2
+	$(CXX) $(CXXFLAGS) -Isrc -c $< -o $@
 
 build/app.res: src/app.rc installer/selenita.ico | build
 	windres $< -O coff -o $@
@@ -33,7 +42,7 @@ build/libcspice.a: $(CSO)
 	$(file >build/cspice.rsp,$^)
 	ar rcs $@ @build/cspice.rsp
 
-build build/cspice build/imgui:
+build build/cspice build/imgui build/linna2:
 	mkdir $(subst /,\,$@)
 
--include $(APP:.o=.d)
+-include $(APP:.o=.d) $(LINNA:.o=.d)

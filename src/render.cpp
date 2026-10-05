@@ -4,6 +4,7 @@
 #include <tiny_obj_loader.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <cstddef>
 #include <fstream>
 
 namespace {
@@ -242,7 +243,9 @@ void Renderer::moonAndSky() {
     glEnable(GL_BLEND);
     glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
     glUseProgram(sky);
+    glColorMaski(1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);  // the sky has no direct pass
     glDrawArrays(GL_POINTS, 0, stars + 5);
+    glColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
 }
@@ -341,8 +344,9 @@ void Renderer::bindData() {
 std::vector<Probe> Renderer::probeAll(const std::vector<glm::dvec3>& pos, const std::vector<glm::dvec3>& sun) {
     constexpr size_t CHUNK = 1 << 16;  // points per dispatch, far below the driver's time limit
     std::vector<Probe> out(pos.size());
-    std::vector<glm::vec4> in(2 * CHUNK);
-    GLuint inBuf = buffer(sizeof(glm::vec4) * in.size(), nullptr, GL_DYNAMIC_STORAGE_BIT), outBuf = buffer(sizeof(Probe) * CHUNK, nullptr, 0);
+    size_t cap = std::max<size_t>(std::min(CHUNK, pos.size()), 1);  // buffers no larger than the request
+    std::vector<glm::vec4> in(2 * cap);
+    GLuint inBuf = buffer(sizeof(glm::vec4) * in.size(), nullptr, GL_DYNAMIC_STORAGE_BIT), outBuf = buffer(sizeof(Probe) * cap, nullptr, 0);
     FrameUBO global{};  // no streamed windows until the next draw uploads the frame again
     glNamedBufferSubData(frameUbo, 0, sizeof global, &global);
     bindData();
@@ -370,8 +374,11 @@ std::vector<Probe> Renderer::probeAll(const std::vector<glm::dvec3>& pos, const 
 std::vector<glm::vec2> Renderer::sample(const std::vector<glm::vec3>& n, bool sun) {
     constexpr size_t CHUNK = 1 << 16;
     std::vector<glm::vec2> out(n.size());
-    std::vector<glm::vec4> in(CHUNK);
-    GLuint inBuf = buffer(sizeof(glm::vec4) * CHUNK, nullptr, GL_DYNAMIC_STORAGE_BIT), outBuf = buffer(sizeof(glm::vec2) * CHUNK, nullptr, 0);
+    size_t cap = std::max<size_t>(std::min(CHUNK, n.size()), 1);
+    std::vector<glm::vec4> in(cap);
+    GLuint inBuf = buffer(sizeof(glm::vec4) * cap, nullptr, GL_DYNAMIC_STORAGE_BIT), outBuf = buffer(sizeof(glm::vec2) * cap, nullptr, 0);
+    glm::vec4 windows[2] = {sldem->window(), polar->window()};  // the streamed terrain as it is now, also without a frame drawn
+    glNamedBufferSubData(frameUbo, offsetof(FrameUBO, sldemWin), sizeof windows, windows);
     bindData();
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, outBuf);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, inBuf);
@@ -401,4 +408,27 @@ std::vector<uint8_t> Renderer::cameraPixels() {
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glGetTextureImage(camView, 0, GL_RGB, GL_UNSIGNED_BYTE, GLsizei(px.size()), px.data());
     return px;
+}
+
+void Renderer::addDirectPass() {
+    glCreateTextures(GL_TEXTURE_2D, 1, &camDirect);
+    glTextureStorage2D(camDirect, 1, GL_R32F, cfg->sensor.x, cfg->sensor.y);
+    glNamedFramebufferTexture(camFbo, GL_COLOR_ATTACHMENT1, camDirect, 0);
+    GLenum buffers[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glNamedFramebufferDrawBuffers(camFbo, 2, buffers);
+}
+
+std::vector<float> Renderer::cameraLinear(bool direct) {
+    std::vector<float> px(size_t(cfg->sensor.x) * cfg->sensor.y);
+    glGetTextureImage(direct ? camDirect : camTex, 0, GL_RED, GL_FLOAT, GLsizei(px.size() * sizeof(float)), px.data());
+    return px;
+}
+
+// reversed-Z depth ZNEAR / z, bilinear between the pixels around the centre
+double Renderer::centerRange() {
+    float d[4];
+    glGetTextureSubImage(camDepth, 0, cfg->sensor.x / 2 - 1, cfg->sensor.y / 2 - 1, 0, 2, 2, 1, GL_DEPTH_COMPONENT, GL_FLOAT, sizeof d, d);
+    double z = 0;
+    for (float v : d) z += ZNEAR / v / 4;
+    return z;
 }

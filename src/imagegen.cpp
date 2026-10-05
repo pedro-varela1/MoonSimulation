@@ -9,13 +9,6 @@
 #include "craters.h"
 #include "platform.h"
 
-namespace {
-
-constexpr int RING = 12, RIM = 64, GRID = 48;  // rim height samples, projected rim points, depth grid cells per side
-constexpr double PI = 3.14159265358979;
-
-std::filesystem::path u8(const std::string& s) { return std::filesystem::path(std::u8string(s.begin(), s.end())); }
-
 bool writeFile(const std::string& path, const std::string& text) {
     FILE* f = openFile(path, L"wb");
     if (!f) return false;
@@ -23,8 +16,7 @@ bool writeFile(const std::string& path, const std::string& text) {
     return fclose(f) == 0 && ok;
 }
 
-// 8-bit RGB PNG from OpenGL rows (bottom row first)
-bool writePng(const std::string& path, int w, int h, const std::vector<uint8_t>& rgb) {
+bool writePng(const std::string& path, int w, int h, int channels, int depth, const void* pixels, bool bottomUp) {
     FILE* f = openFile(path, L"wb");
     if (!f) return false;
     png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
@@ -36,16 +28,18 @@ bool writePng(const std::string& path, int w, int h, const std::vector<uint8_t>&
     }
     png_init_io(png, f);
     png_set_compression_level(png, 3);
-    png_set_IHDR(png, info, w, h, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+    png_set_IHDR(png, info, w, h, depth, channels == 1 ? PNG_COLOR_TYPE_GRAY : PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+                 PNG_FILTER_TYPE_DEFAULT);
     png_set_sRGB(png, info, PNG_sRGB_INTENT_PERCEPTUAL);
     png_write_info(png, info);
-    for (int y = h - 1; y >= 0; y--) png_write_row(png, &rgb[size_t(y) * w * 3]);
+    if (depth == 16) png_set_swap(png);  // PNG samples are big-endian
+    size_t stride = size_t(w) * channels * depth / 8;
+    for (int y = 0; y < h; y++) png_write_row(png, static_cast<const png_byte*>(pixels) + size_t(bottomUp ? h - 1 - y : y) * stride);
     png_write_end(png, nullptr);
     png_destroy_write_struct(&png, &info);
     return fclose(f) == 0;
 }
 
-// linearly interpolated, as numpy.percentile
 double percentile(std::vector<double> v, double p) {
     std::sort(v.begin(), v.end());
     double x = p / 100 * double(v.size() - 1);
@@ -53,33 +47,12 @@ double percentile(std::vector<double> v, double p) {
     return i + 1 < v.size() ? v[i] + (v[i + 1] - v[i]) * (x - double(i)) : v[i];
 }
 
-struct Local { glm::dvec3 east, north, up; };
+namespace {
 
-Local local(double lat, double lon) {
-    double la = glm::radians(lat), lo = glm::radians(lon);
-    glm::dvec3 up(std::cos(la) * std::cos(lo), std::cos(la) * std::sin(lo), std::sin(la)), east(-std::sin(lo), std::cos(lo), 0);
-    return {east, glm::cross(up, east), up};
-}
+constexpr int RING = 12, RIM = 64, GRID = 48;  // rim height samples, projected rim points, depth grid cells per side
+constexpr double PI = 3.14159265358979;
 
-// image conic of the ellipse with semi-axes a, b (km), major axis th (rad) from east toward north, mapped to the image by the
-// homography H of its plane: centre (px), semi-axes (px, a >= b) and major axis angle (rad in [0, pi), from +x toward +y)
-bool conic(const glm::dmat3& H, double a, double b, double th, double out[5]) {
-    glm::dmat3 R(std::cos(th), std::sin(th), 0, -std::sin(th), std::cos(th), 0, 0, 0, 1), Hi = glm::inverse(H);
-    glm::dmat3 Q = glm::transpose(Hi) * R * glm::dmat3(1 / (a * a), 0, 0, 0, 1 / (b * b), 0, 0, 0, -1) * glm::transpose(R) * Hi;
-    double A = Q[0][0], B = Q[1][0] + Q[0][1], C = Q[1][1], D = Q[2][0] + Q[0][2], E = Q[2][1] + Q[1][2], F = Q[2][2];
-    double det = B * B - 4 * A * C;
-    if (std::abs(det) < 1e-300) return false;
-    double xc = (2 * C * D - B * E) / det, yc = (2 * A * E - B * D) / det, Fc = A * xc * xc + B * xc * yc + C * yc * yc + D * xc + E * yc + F;
-    if (std::abs(Fc) < 1e-300) return false;
-    double m00 = -A / Fc, m01 = -B / 2 / Fc, m11 = -C / Fc, s = std::sqrt((m00 - m11) * (m00 - m11) + 4 * m01 * m01);
-    double small = (m00 + m11 - s) / 2, large = (m00 + m11 + s) / 2;
-    if (small <= 0) return false;
-    double vx = 1, vy = 0;  // eigenvector of the smaller eigenvalue: the major axis
-    if (std::abs(m01) > 1e-12 * (std::abs(m00) + std::abs(m11))) vx = m01, vy = small - m00;
-    else if (m00 > m11) vx = 0, vy = 1;
-    out[0] = xc, out[1] = yc, out[2] = 1 / std::sqrt(small), out[3] = 1 / std::sqrt(large), out[4] = std::fmod(std::atan2(vy, vx) + 2 * PI, PI);
-    return true;
-}
+std::filesystem::path u8(const std::string& s) { return std::filesystem::path(std::u8string(s.begin(), s.end())); }
 
 // labels of the craters in view, as linna-imagegenerator writes them. Each centre sits at its rim height (median of the terrain
 // on the crater circle); depth and rim height follow measure_depth (15th percentile of the floor within 0.35 R, 85th of the
@@ -94,22 +67,22 @@ std::string labels(Renderer& rd, const Catalogue& cat, const Camera& c, glm::ive
         return glm::dvec2(W / 2 + fx * glm::dot(d, c.right) / z, H / 2 - fy * glm::dot(d, c.up) / z);
     };
     std::vector<const Crater*> cand = cat.within(glm::normalize(c.eye), std::acos(MOON_R / glm::length(c.eye)) + cat.maxDiameter / 2 / MOON_R);
-    std::vector<Local> frame;
+    std::vector<Enu> frame;
     std::vector<glm::vec3> pts;
     for (const Crater* k : cand) {
-        Local f = frame.emplace_back(local(k->lat, k->lon));
+        Enu f = frame.emplace_back(enu(k->lat, k->lon));
         for (int i = 0; i < RING; i++)
             pts.push_back(glm::normalize(MOON_R * f.up + k->diam / 2 * (std::cos(2 * PI * i / RING) * f.east + std::sin(2 * PI * i / RING) * f.north)));
     }
     std::vector<glm::vec2> ring = rd.sample(pts, false);
 
-    struct Hit { const Crater* k; Local f; std::string head; std::vector<glm::dvec3> rim; double visFrac, offnadir; };
+    struct Hit { const Crater* k; Enu f; std::string head; std::vector<glm::dvec3> rim; double visFrac, offnadir; };
     std::vector<Hit> hits;
     glm::dmat3 KM = glm::dmat3(fx, 0, 0, 0, -fy, 0, W / 2, H / 2, 1) * glm::transpose(glm::dmat3(c.right, c.up, c.fwd));
     char head[200];
     for (size_t i = 0; i < cand.size(); i++) {
         const Crater& k = *cand[i];
-        const Local& f = frame[i];
+        const Enu& f = frame[i];
         std::vector<double> h(RING);
         for (int j = 0; j < RING; j++) h[j] = ring[i * RING + j].x;
         glm::dvec3 C = (MOON_R + percentile(h, 50)) * f.up;
@@ -133,7 +106,7 @@ std::string labels(Renderer& rd, const Catalogue& cat, const Camera& c, glm::ive
             front = front && zj > 0;
             if (zj > 0 && glm::dot(p, c.eye) > R2 && pj.x >= 0 && pj.x <= W && pj.y >= 0 && pj.y <= H) rim.push_back(p);
         }
-        if (!front || rim.empty() || !conic(KM * glm::dmat3(f.east, f.north, C - c.eye), a, b, th, e)) continue;
+        if (!front || rim.empty() || !imageEllipse(KM * glm::dmat3(f.east, f.north, C - c.eye), a, b, th, e)) continue;
         snprintf(head, sizeof head, "0 %.8f %.8f %.8f %.8f %.4f %.6f", e[0] / W, e[1] / H, e[2] / D, e[3] / D, glm::degrees(e[4]), k.diam / 2);
         double offnadir = glm::degrees(std::acos(std::clamp(glm::dot(glm::normalize(c.eye - C), f.up), -1.0, 1.0)));
         hits.push_back({&k, f, head, rim, double(rim.size()) / RIM, offnadir});
@@ -236,7 +209,7 @@ int generateImages(App& a, const std::string& folder, std::string& error, const 
                  a.cfg.tilt, a.cfg.azimuth, a.cfg.roll, heading, ev, sun.x, std::fmod(sun.x - heading + 360, 360.0), sun.y,
                  earthAz, std::fmod(earthAz - heading + 360, 360.0), glm::degrees(std::asin(glm::dot(e / de, st.p / r))), de,
                  glm::degrees(2 * std::asin(EARTH_R / de)), lit);
-        if (!writePng(folder + "/img/" + name + ".png", size.x, size.y, a.renderer.cameraPixels()) || !writeFile(folder + "/json/" + name + ".json", json) ||
+        if (!writePng(folder + "/img/" + name + ".png", size.x, size.y, 3, 8, a.renderer.cameraPixels().data(), true) || !writeFile(folder + "/json/" + name + ".json", json) ||
             !writeFile(folder + "/label/" + name + ".txt", labels(a.renderer, cat, c, size, a.cfg.labelConic)))
             return error = "Could not write the image " + name + " in " + folder, -1;
         if (!progress(++done, rows.size(), "")) break;

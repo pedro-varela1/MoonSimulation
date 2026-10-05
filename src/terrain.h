@@ -25,6 +25,7 @@ public:
     int resident = 0, pending = 0;
     int missing = 0;       // tiles within needKm of the path that can load but are not shown in full yet
     bool present = false;  // source files installed
+    bool snap = false;     // window centred on every update, without hysteresis or unwrapping: its place depends on the request alone
     virtual ~Streamer() = default;
     void update(const glm::dvec3& center, const std::vector<glm::dvec3>& path, double needKm, bool active, double dt);
     glm::vec4 window() const { return {float(x0), float(y0), active ? 1.f : 0.f, float(tag)}; }

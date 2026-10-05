@@ -18,6 +18,7 @@ std::string utc(double et);
 glm::dvec3 sun(double et);
 glm::dvec3 earth(double et);
 glm::dmat3 rotation(const char* from, const char* to, double et);
+void stateRotation(const char* from, const char* to, double et, glm::dmat3& r, glm::dmat3& dr);  // v_to = r v + dr p
 std::vector<Source> stars(const std::string& catalog, double et);
 std::array<Source, 5> planets(double et);
 }

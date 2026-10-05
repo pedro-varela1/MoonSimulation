@@ -28,7 +28,25 @@ inline size_t commentAt(const std::string& s) {
     return std::string::npos;
 }
 
-inline Config loadConfig(const char* path) {
+// key = value lines, keys trimmed, values with their comments removed
+inline std::map<std::string, std::string> readIni(const char* path) {
+    std::ifstream f(path);
+    if (!f) fatal(std::string("Could not open the configuration file ") + path);
+    std::map<std::string, std::string> out;
+    for (std::string line; std::getline(f, line);) {
+        line = line.substr(0, commentAt(line));
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        key.erase(key.find_last_not_of(" \t") + 1);
+        key.erase(0, key.find_first_not_of(" \t"));
+        out[key] = line.substr(eq + 1);
+    }
+    return out;
+}
+
+// rest receives the keys that are not the simulator's; without it they are reported as unknown
+inline Config loadConfig(const char* path, std::map<std::string, std::string>* rest = nullptr) {
     Config c;
     auto str = [](std::string& s) { return [&s](std::istream& in) { std::getline(in >> std::ws, s); s.erase(s.find_last_not_of(" \t\r") + 1); }; };
     auto num = [](auto& v) { return [&v](std::istream& in) { in >> v; }; };
@@ -47,17 +65,10 @@ inline Config loadConfig(const char* path) {
         {"crater_db", str(c.craterDb)}, {"images_end_utc", str(c.imagesEnd)}, {"crater_diameter", vec(c.craterDiam)},
         {"label_format", [&](std::istream& in) { std::string v; in >> v; c.labelConic = v != "circle"; }},
     };
-    std::ifstream f(path);
-    if (!f) fatal(std::string("Could not open the configuration file ") + path);
-    for (std::string line; std::getline(f, line);) {
-        line = line.substr(0, commentAt(line));
-        auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = line.substr(0, eq);
-        key.erase(key.find_last_not_of(" \t") + 1);
-        key.erase(0, key.find_first_not_of(" \t"));
-        std::istringstream val(line.substr(eq + 1));
+    for (auto& [key, value] : readIni(path)) {
+        std::istringstream val(value);
         if (auto k = keys.find(key); k != keys.end()) k->second(val);
+        else if (rest) (*rest)[key] = value;
         else fprintf(stderr, "config: chave desconhecida '%s'\n", key.c_str());
     }
     return c;

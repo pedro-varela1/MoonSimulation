@@ -45,7 +45,8 @@ std::string fileDialog(GLFWwindow* owner, const std::string& current, const wcha
 }
 
 void fatal(const std::string& message) {
-    MessageBoxW(nullptr, wide(message).c_str(), L"SelenITA Lunar Orbit Simulator", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    if (GetConsoleWindow()) fprintf(stderr, "error: %s\n", message.c_str());  // console tools (linna2, the debug build)
+    else MessageBoxW(nullptr, wide(message).c_str(), L"SelenITA Lunar Orbit Simulator", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     exit(1);
 }
 

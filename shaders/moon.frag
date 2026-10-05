@@ -4,12 +4,13 @@ const vec3 LIMB = vec3(0.56, 0.63, 0.79), TAU_R = vec3(0.0516, 0.0865, 0.309), G
 
 in vec2 ndc;
 layout(location = 0) out vec4 color;
+layout(location = 1) out float direct;  // direct sunlight: cos(incidence) x visible solar disc fraction (dataset lit test)
 
 vec2 texGrad(vec3 dp, vec3 n, vec3 east, vec3 north, float r) {
     return vec2(dot(dp, east) / (2.0 * PI * r * max(length(n.xy), 1e-4)), -dot(dp, north) / (PI * r));
 }
 
-vec3 terrain(vec3 d, vec3 dx, vec3 dy, float t, float dA) {
+vec3 terrain(vec3 d, vec3 dx, vec3 dy, float t, float dA, out float sunlit) {
     vec3 p = eye.xyz + t * d, n0 = normalize(p);
     float fp = t * dA, r = length(p), dn = dot(d, n0);
     vec3 N = normalAt(n0, log2(fp / TEXEL));
@@ -20,6 +21,7 @@ vec3 terrain(vec3 d, vec3 dx, vec3 dy, float t, float dA) {
     float mu = max(dot(N, -d), 1e-3), mu0 = dot(N, sunDir.xyz), mu0E = dot(N, earthDir.xyz);
     vec3 L = vec3(0.0);
     float v = mu0 > 0.0 ? visibility(p, sunDir.xyz, sunDir.w, fp) : 0.0;
+    sunlit = v * max(mu0, 0.0);
     if (v > 0.0) L = IF * hapkeRatio(mu0, mu, dot(sunDir.xyz, -d), P) * v;
     else if (mu0E > 0.0 && light.y > 0.0) L = IF * hapkeRatio(mu0E, mu, dot(earthDir.xyz, -d), P) * visibility(p, earthDir.xyz, earthDir.w, fp) * light.y;
     return L * light.x;
@@ -56,9 +58,10 @@ void main() {
     vec3 dx = 2.0 * right.w / size.x * right.xyz, dy = 2.0 * up.w / size.y * up.xyz;
     dx = (dx - d * dot(d, dx)) / length(D);
     dy = (dy - d * dot(d, dy)) / length(D);
-    float t, dA = max(length(dx), length(dy));
+    float t, dA = max(length(dx), length(dy)), sunlit = 0.0;
     bool hit = castRay(eye.xyz, d, dA, t);
-    vec3 L = hit ? terrain(d, dx, dy, t, dA) : discs(d, dA, t);
+    vec3 L = hit ? terrain(d, dx, dy, t, dA, sunlit) : discs(d, dA, t);
+    direct = sunlit;
     color = vec4(display(light.w > 0.5 ? L.rrr : L), hit || eye.w > 0.0 ? 1.0 : 0.0);  // alpha: terrain mask for the camera exposure; the orbit view is opaque
     gl_FragDepth = t > 0.0 ? fwd.w / (t * dot(d, fwd.xyz)) : 0.0;
 }

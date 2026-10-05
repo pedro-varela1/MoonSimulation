@@ -40,6 +40,9 @@ public:
     std::vector<glm::vec2> sample(const std::vector<glm::vec3>& n, bool sun);
     float exposure();                   // EV of the last camera image, once the GPU is done with it
     std::vector<uint8_t> cameraPixels();  // last camera image as shown: sRGB RGB rows, bottom row first
+    void addDirectPass();  // the camera image also gets the direct sunlight pass: cos(incidence) x visible solar disc fraction
+    std::vector<float> cameraLinear(bool direct);  // last camera image (linear, first band) or its direct pass, bottom row first
+    double centerRange();  // distance along the boresight to the terrain at the image centre (km), from the depth buffer
     GLuint orbitImage() const { return viewColor; }
     GLuint cameraImage() const { return camView; }
 
@@ -49,7 +52,7 @@ private:
     const Streamer *sldem = nullptr, *polar = nullptr;
     GLuint moon = 0, sky = 0, show = 0, overlay = 0, hist = 0, resolve = 0, probe = 0, sampler = 0, vao = 0;
     GLuint frameUbo = 0, camUbo = 0, viewUbo = 0, probeBuf = 0, probeIn = 0, expBuf = 0, trackBuf = 0, fovBuf = 0, meshBuf = 0, skyBuf = 0;
-    GLuint camTex = 0, camDepth = 0, camFbo = 0, camView = 0, camViewFbo = 0, viewColor = 0, viewDepth = 0, viewFbo = 0, capH = 0, capA = 0;
+    GLuint camTex = 0, camDepth = 0, camDirect = 0, camFbo = 0, camView = 0, camViewFbo = 0, viewColor = 0, viewDepth = 0, viewFbo = 0, capH = 0, capA = 0;
     const float *probeMap = nullptr, *expMap = nullptr;
     glm::ivec2 viewSize{0};
     int meshVerts = 0, stars = 0;

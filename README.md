@@ -131,13 +131,17 @@ build.bat        # the first run also compiles CSPICE (~3 min)
 build.bat run    # or: MoonSimulation.exe [config.ini]
 ```
 
-The executable has no console window. Fatal errors appear as dialogs, for example a missing data file, a shader the driver rejects, or not enough video memory. For a console build, use `mingw32-make SUBSYSTEM=`.
+The executable has no console window. Fatal errors appear as dialogs, for example a missing data file, a shader the driver rejects, or not enough video memory. For a console build, use `mingw32-make SUBSYSTEM=`; it prints those errors instead.
 
 The executable changes to its own folder at start, so relative paths in `config.ini` resolve next to it, from any shortcut.
 
 The first start loads about 40 s of data, most of it the 3.5 GB of float WAC tiles on disk. Going back to the start screen and starting again reloads only what changed:
 - the orbit, when its file changed;
 - the global maps, when the quality changed.
+
+## LINNA-2 dataset generator
+
+`linna2/` builds `linna2.exe`, a console program that generates the LINNA-2 training and evaluation datasets with this renderer. It has its own `config.ini` and is run from `linna2/run.ps1`; see [linna2/README.md](linna2/README.md).
 
 ## Installer
 

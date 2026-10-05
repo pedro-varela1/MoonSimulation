@@ -81,6 +81,13 @@ glm::dmat3 rotation(const char* from, const char* to, double et) {
     return glm::transpose(glm::make_mat3(&m[0][0]));
 }
 
+void stateRotation(const char* from, const char* to, double et, glm::dmat3& r, glm::dmat3& dr) {
+    SpiceDouble m[6][6];
+    sxform_c(from, to, et, m);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) r[j][i] = m[i][j], dr[j][i] = m[i + 3][j];
+}
+
 // SPICE type 1 star catalog (EK), proper motion applied up to et
 std::vector<Source> stars(const std::string& catalog, double et) {
     if (!std::filesystem::exists(catalog)) fatal("The star catalog was not found: " + catalog);

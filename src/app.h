@@ -25,6 +25,14 @@ inline glm::dvec2 sunAzEl(const glm::dvec3& p, const glm::dvec3& sun) {
     return {azimuthAt(p, sun), glm::degrees(std::asin(glm::dot(glm::normalize(sun), glm::normalize(p))))};
 }
 
+// camera axes (x = image right, y = image top, -z = boresight) from a base (x right, y ahead, z up): tilted off the base's nadir
+// toward the azimuth (degrees clockwise from ahead), then rolled (positive turns the image clockwise); angles in degrees
+inline glm::dmat3 pointing(const glm::dmat3& base, double tilt, double azimuth, double roll) {
+    auto rz = [](double a) { return glm::dmat3(std::cos(a), std::sin(a), 0, -std::sin(a), std::cos(a), 0, 0, 0, 1); };
+    double c = std::cos(glm::radians(tilt)), s = std::sin(glm::radians(tilt));
+    return base * rz(-glm::radians(azimuth)) * glm::dmat3(1, 0, 0, 0, c, s, 0, -s, c) * rz(glm::radians(roll));
+}
+
 struct App {
     std::string cfgPath, orbitLoaded, notice;  // orbitLoaded: file and frame of the loaded orbit; notice: shown under the start screen buttons
     Config cfg;
@@ -48,9 +56,7 @@ struct App {
     // camera frame: x = image right, y = image top, -z = boresight
     glm::dmat3 attitude(const State& s) const {
         glm::dvec3 U = glm::normalize(s.p), F = glm::normalize(s.v - glm::dot(s.v, U) * U);
-        auto rz = [](double a) { return glm::dmat3(std::cos(a), std::sin(a), 0, -std::sin(a), std::cos(a), 0, 0, 0, 1); };
-        double c = std::cos(glm::radians(cfg.tilt)), s1 = std::sin(glm::radians(cfg.tilt));
-        return glm::dmat3(glm::cross(F, U), F, U) * rz(-glm::radians(cfg.azimuth)) * glm::dmat3(1, 0, 0, 0, c, s1, 0, -s1, c) * rz(glm::radians(cfg.roll));
+        return pointing(glm::dmat3(glm::cross(F, U), F, U), cfg.tilt, cfg.azimuth, cfg.roll);
     }
 
     // distance (km) along the boresight to the reference sphere, -1 when the boresight misses the Moon
